@@ -1,0 +1,13 @@
+# If document root is the package root (not public/), send traffic into public/
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(public)($|/) - [L]
+  RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
+
+# Block direct web access to sensitive dirs when docroot is package root
+<IfModule mod_authz_core.c>
+  <If "%{REQUEST_URI} =~ m#/(app|sql|templates|connector-plugin|dist)/#">
+    Require all denied
+  </If>
+</IfModule>
