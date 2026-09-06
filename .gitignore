@@ -1,0 +1,10 @@
+node_modules/
+.next/
+dist/
+bin/
+*.exe
+.env
+.DS_Store
+coverage/
+apps/api/sameh-api
+vendor/

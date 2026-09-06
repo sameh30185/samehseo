@@ -1,0 +1,63 @@
+:root {
+  --bg: #0b1220;
+  --panel: #121a2b;
+  --border: #243049;
+  --text: #e8eefc;
+  --muted: #9aa8c7;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  line-height: 1.5;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.layout { min-height: 100vh; display: flex; flex-direction: column; }
+.nav {
+  display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+  padding: 0.85rem 1.25rem; border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.nav .brand { font-weight: 700; margin-inline-end: auto; }
+.main { padding: 1.25rem; max-width: 960px; width: 100%; margin: 0 auto; }
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1rem 1.15rem; margin-bottom: 1rem;
+}
+.badge {
+  display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem;
+  border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+}
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+.badge.danger { color: var(--danger); border-color: var(--danger); }
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+label { display: block; margin-bottom: 0.35rem; color: var(--muted); }
+input, button, textarea {
+  font: inherit; border-radius: 8px; border: 1px solid var(--border);
+  background: #0a101c; color: var(--text); padding: 0.55rem 0.75rem;
+  width: 100%;
+}
+button {
+  background: var(--accent); border: none; cursor: pointer; font-weight: 600;
+  width: auto;
+}
+button.secondary { background: transparent; border: 1px solid var(--border); }
+button.danger { background: var(--danger); }
+.form-row { margin-bottom: 0.85rem; }
+.error { color: var(--danger); margin-top: 0.5rem; }
+.muted { color: var(--muted); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: start; padding: 0.55rem 0.35rem; border-bottom: 1px solid var(--border); }
+h1, h2 { margin-top: 0; }
+.grid { display: grid; gap: 0.75rem; }
+@media (min-width: 720px) {
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+}
