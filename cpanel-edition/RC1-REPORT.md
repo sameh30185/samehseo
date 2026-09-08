@@ -87,7 +87,7 @@ Coverage includes: sticky TOTP; Bridge 200/403/404/500/HTML/malformed/incomplete
 
 ## Artifacts
 
-- Commit: see git (`rc/12.0.0-rc1` / tag `v12.0.0-rc1`)
+- Commit: `f79746ea95829eacb74967a5ff665e1fa06df156` (branch `rc/12.0.0-rc1`, tag `v12.0.0-rc1`)
 - Zips:
   - `/workspace/sameh-12.0/cpanel-edition/dist/SAMEH-12.0-cpanel.zip`
   - `/workspace/sameh-12.0/cpanel-edition/dist/SAMEH-connector.zip`
