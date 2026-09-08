@@ -7,7 +7,7 @@
 
 # Block direct web access to sensitive dirs when docroot is package root
 <IfModule mod_authz_core.c>
-  <If "%{REQUEST_URI} =~ m#/(app|sql|templates|connector-plugin|dist)/#">
+  <If "%{REQUEST_URI} =~ m#/(app|sql|templates|connector-plugin|dist|storage|tests)/#">
     Require all denied
   </If>
 </IfModule>

@@ -18,7 +18,7 @@
 
 <div class="card">
   <h2>1) Pairing — ربط الـ Connector</h2>
-  <p>يولّد رمز Connector + سر HMAC مشترك. انسخهما إلى إعدادات إضافة WordPress.</p>
+  <p>يولّد رمز Connector + سر HMAC + <strong>pairing token قصير العمر (مرة واحدة)</strong>. انسخها إلى إعدادات إضافة WordPress. لا تُسجَّل الأسرار في السجلات.</p>
   <form method="post" action="/sites/<?= (int)$site['id'] ?>/pair" onsubmit="return confirm('توليد مفاتيح جديدة يبطل القديمة. متابعة؟');">
     <?= \Sameh\Security\Csrf::field() ?>
     <button type="submit"><?= empty($site['hmac_secret']) ? 'توليد مفاتيح الربط' : 'إعادة توليد المفاتيح' ?></button>
@@ -29,6 +29,10 @@
       <p>Core URL: <code id="core-url"><?= \Sameh\App::e(\Sameh\Config::get('app_url', '')) ?></code>
         <button type="button" class="secondary" data-copy="#core-url">نسخ / Copy</button></p>
       <p>Site ID: <code id="pair-sid"><?= (int)$site['id'] ?></code></p>
+      <p>Pairing Token (<?= (int)($pairResult['pairing_ttl_seconds'] ?? 900) ?>s TTL, one-time):
+        <code id="pair-pt"><?= \Sameh\App::e($pairResult['pairing_token'] ?? '') ?></code>
+        <button type="button" class="secondary" data-copy="#pair-pt">نسخ / Copy</button></p>
+      <p>Expires: <code><?= \Sameh\App::e($pairResult['pairing_expires_at'] ?? '') ?></code></p>
       <p>Connector Token: <code id="pair-token"><?= \Sameh\App::e($pairResult['connector_token']) ?></code>
         <button type="button" class="secondary" data-copy="#pair-token">نسخ / Copy</button></p>
       <p>Shared HMAC Secret: <code id="pair-secret"><?= \Sameh\App::e($pairResult['hmac_secret']) ?></code>
@@ -36,13 +40,18 @@
       <ol>
         <li>ارفع مجلد <code>sameh-connector</code> إلى <code>wp-content/plugins/</code> أو ثبّت الـ zip</li>
         <li>فعّل الإضافة من لوحة WordPress</li>
-        <li>Settings → SAMEH Connector: الصق Core URL + Site ID + Shared Secret</li>
-        <li>ارجع هنا واضغط Test Health ثم Discover</li>
+        <li>Settings → SAMEH Connector: الصق Core URL + Site ID + Shared Secret + Token</li>
+        <li>ارجع هنا واضغط Test Health ثم Discover (أول Health ناجح يستهلك pairing token)</li>
       </ol>
     </div>
   <?php elseif (!empty($site['hmac_secret'])): ?>
     <p class="empty">الموقع مقترن (PAIRED). السر لا يُعرض مرة أخرى — أعد التوليد إن فقدته.</p>
     <p>Token (جزئي): <code><?= \Sameh\App::e(substr((string)$site['connector_token'], 0, 8)) ?>…</code></p>
+    <?php if (!empty($site['pairing_consumed_at'])): ?>
+      <p><span class="badge ok">Pairing token مستهلك</span></p>
+    <?php elseif (!empty($site['pairing_expires_at'])): ?>
+      <p><span class="badge warn">Pairing token لم يُستهلك بعد — ينتهي <?= \Sameh\App::e((string)$site['pairing_expires_at']) ?></span></p>
+    <?php endif; ?>
   <?php else: ?>
     <p class="empty">NOT CONNECTED — لم يتم الربط بعد.</p>
   <?php endif; ?>

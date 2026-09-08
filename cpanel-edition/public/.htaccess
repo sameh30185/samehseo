@@ -8,6 +8,6 @@
 </IfModule>
 
 # Deny access to sensitive patterns if misconfigured
-<FilesMatch "\.(sql|md|env)$">
+<FilesMatch "\.(sql|md|env|json)$">
   Require all denied
 </FilesMatch>

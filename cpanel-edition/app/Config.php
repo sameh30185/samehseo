@@ -60,6 +60,18 @@ final class Config
         return null;
     }
 
+    public static function version(): string
+    {
+        $file = dirname(__DIR__) . '/VERSION';
+        if (is_file($file)) {
+            $v = trim((string)file_get_contents($file));
+            if ($v !== '') {
+                return $v;
+            }
+        }
+        return (string) self::get('app_version', '12.0.0-rc1');
+    }
+
     private static function normalize(array $cfg): array
     {
         $cfg['db_host'] = $cfg['db_host'] ?? 'localhost';
@@ -69,5 +81,11 @@ final class Config
             $cfg['secure_cookies'] = str_starts_with($cfg['app_url'], 'https://');
         }
         return $cfg;
+    }
+
+    /** Test helper — reset cached config */
+    public static function reset(): void
+    {
+        self::$data = null;
     }
 }

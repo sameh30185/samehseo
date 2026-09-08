@@ -12,6 +12,7 @@ use Sameh\Security\Totp;
 use Sameh\Sites\SiteRepository;
 use Sameh\Connector\BridgeClient;
 use Sameh\Audit\AuditLog;
+use Sameh\Install\Preflight;
 
 final class Controllers
 {
@@ -25,18 +26,27 @@ final class Controllers
         if ($configured) {
             $dbError = Database::tryConnect();
         }
+        $preflight = Preflight::run();
+        $preflightOk = Preflight::allCriticalPassed($preflight);
         App::render('install', [
             'page' => 'install',
             'title' => 'تثبيت SAMEH / Install',
             'configured' => $configured,
             'dbError' => $dbError,
             'configPath' => Config::path(),
+            'preflight' => $preflight,
+            'preflightOk' => $preflightOk,
         ]);
     }
 
     public static function installPost(): void
     {
         Csrf::requireValid();
+        $preflight = Preflight::run();
+        if (!Preflight::allCriticalPassed($preflight)) {
+            App::flash('error', 'فشل فحص ما قبل التثبيت / Preflight failed — أصلح الأخطاء أدناه');
+            App::redirect('/install');
+        }
         if (!Config::isConfigured()) {
             App::flash('error', 'أنشئ ملف config أولاً / Create config file first');
             App::redirect('/install');
@@ -114,12 +124,24 @@ final class Controllers
         App::redirect('/login');
     }
 
+    /**
+     * TOTP setup: secret created ONCE per setup session; sticky across refresh.
+     * Only changes on explicit Reset/Regenerate.
+     */
     public static function totpSetupGet(): void
     {
         Auth::requireLogin();
         $user = Auth::user();
-        $secret = Totp::generateSecret();
-        $_SESSION['totp_setup_secret'] = $secret;
+        $forceNew = isset($_GET['reset']) && $_GET['reset'] === '1';
+
+        if ($forceNew) {
+            unset($_SESSION['totp_setup_secret']);
+        }
+
+        if (empty($_SESSION['totp_setup_secret']) || !is_string($_SESSION['totp_setup_secret'])) {
+            $_SESSION['totp_setup_secret'] = Totp::generateSecret();
+        }
+        $secret = (string)$_SESSION['totp_setup_secret'];
         $uri = Totp::provisioningUri($secret, (string)$user['email'], 'SAMEH');
         App::render('totp_setup', [
             'page' => '2fa',
@@ -135,6 +157,17 @@ final class Controllers
         Auth::requireLogin();
         Csrf::requireValid();
         $user = Auth::user();
+
+        // Explicit regenerate via POST
+        if (!empty($_POST['regenerate'])) {
+            $_SESSION['totp_setup_secret'] = Totp::generateSecret();
+            if ((int)$user['totp_enabled'] === 1) {
+                Auth::resetTotp((int)$user['id']);
+            }
+            App::flash('success', 'تم توليد سر جديد / New secret generated');
+            App::redirect('/2fa/setup');
+        }
+
         $secret = (string)($_SESSION['totp_setup_secret'] ?? '');
         $code = (string)($_POST['code'] ?? '');
         if ($secret === '' || !Totp::verify($secret, $code)) {
@@ -163,7 +196,7 @@ final class Controllers
         }
         $code = (string)($_POST['code'] ?? '');
         if (!Auth::verifyTotpChallenge($code)) {
-            App::flash('error', 'رمز غير صحيح / Invalid code');
+            App::flash('error', 'رمز غير صحيح أو محاولات كثيرة / Invalid code or rate limited');
             App::redirect('/2fa/verify');
         }
         App::redirect('/dashboard');
@@ -181,6 +214,7 @@ final class Controllers
             'sitesCount' => $sites,
             'pendingCount' => $pending,
             'killSwitch' => $kill,
+            'version' => Config::version(),
         ]);
     }
 
@@ -214,7 +248,16 @@ final class Controllers
             App::flash('error', 'اسم أو رابط غير صالح / Invalid name or URL');
             App::redirect('/sites/add');
         }
-        $id = SiteRepository::create($name, $url, 'READ_ONLY');
+        if (!preg_match('#^https?://#i', $url)) {
+            App::flash('error', 'الرابط يجب أن يبدأ بـ http(s)');
+            App::redirect('/sites/add');
+        }
+        try {
+            $id = SiteRepository::create($name, $url, 'READ_ONLY');
+        } catch (\InvalidArgumentException $e) {
+            App::flash('error', $e->getMessage());
+            App::redirect('/sites/add');
+        }
         $u = Auth::user();
         AuditLog::write((int)$u['id'], 'site_add', 'site', (string)$id, ['name' => $name, 'url' => $url]);
         App::flash('success', 'تمت إضافة الموقع (READ ONLY) / Site added');
@@ -256,10 +299,13 @@ final class Controllers
             App::redirect('/sites');
         }
         $creds = SiteRepository::pair($id);
+        // Never put secrets in audit log
         $_SESSION['pair_result'][$id] = $creds;
         $u = Auth::user();
-        AuditLog::write((int)$u['id'], 'site_pair', 'site', (string)$id, []);
-        App::flash('success', 'تم توليد مفاتيح الربط — انسخها الآن / Pairing credentials generated — copy now');
+        AuditLog::write((int)$u['id'], 'site_pair', 'site', (string)$id, [
+            'pairing_ttl' => $creds['pairing_ttl_seconds'] ?? null,
+        ]);
+        App::flash('success', 'تم توليد مفاتيح الربط ( pairing token صالح لمدة محدودة ) / Pairing credentials generated');
         App::redirect('/sites/' . $id);
     }
 
@@ -277,6 +323,10 @@ final class Controllers
         }
         $res = BridgeClient::health($site);
         SiteRepository::touchHealth($id, (bool)$res['ok']);
+        // Auto-consume pairing token on first successful health (one-time)
+        if ($res['ok'] && !empty($site['pairing_token']) && empty($site['pairing_consumed_at'])) {
+            SiteRepository::consumePairingToken((string)$site['pairing_token']);
+        }
         $u = Auth::user();
         AuditLog::write((int)$u['id'], 'site_health', 'site', (string)$id, [
             'ok' => $res['ok'],
@@ -327,7 +377,7 @@ final class Controllers
             'page' => 'settings',
             'title' => 'الإعدادات / Settings',
             'killSwitch' => Database::setting('kill_switch', '0') === '1',
-            'version' => Database::setting('app_version', '12.0.0-cpanel'),
+            'version' => Config::version(),
         ]);
     }
 

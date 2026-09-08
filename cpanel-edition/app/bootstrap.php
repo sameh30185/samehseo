@@ -8,10 +8,15 @@ require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Security/Csrf.php';
 require_once __DIR__ . '/Security/Totp.php';
 require_once __DIR__ . '/Security/HmacSigner.php';
+require_once __DIR__ . '/Security/NonceStore.php';
+require_once __DIR__ . '/Security/PairingToken.php';
+require_once __DIR__ . '/Security/Redactor.php';
+require_once __DIR__ . '/Security/RateLimiter.php';
 require_once __DIR__ . '/Auth/Auth.php';
 require_once __DIR__ . '/Sites/SiteRepository.php';
 require_once __DIR__ . '/Connector/BridgeClient.php';
 require_once __DIR__ . '/Audit/AuditLog.php';
+require_once __DIR__ . '/Install/Preflight.php';
 require_once __DIR__ . '/Http/Router.php';
 require_once __DIR__ . '/Http/Controllers.php';
 
@@ -29,6 +34,10 @@ final class App
         }
         $name = Config::get('session_name', 'sameh_sess');
         $secure = (bool) Config::get('secure_cookies', false);
+        // Auto-detect HTTPS when config not forcing
+        if (!$secure && !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+            $secure = true;
+        }
         session_name($name);
         session_set_cookie_params([
             'lifetime' => 0,
@@ -45,11 +54,20 @@ final class App
         return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
+    /**
+     * Safe redirect — relative paths only (blocks open redirects).
+     */
     public static function redirect(string $path): never
     {
-        // Relative Location works reliably on cPanel subdomains
-        if ($path === '' || $path[0] !== '/') {
+        if ($path === '' || str_contains($path, '://') || str_starts_with($path, '//')) {
+            $path = '/';
+        }
+        if ($path[0] !== '/') {
             $path = '/' . ltrim($path, '/');
+        }
+        // Block path traversal in Location
+        if (str_contains($path, '..')) {
+            $path = '/';
         }
         header('Location: ' . $path);
         exit;
@@ -57,6 +75,8 @@ final class App
 
     public static function render(string $template, array $vars = []): void
     {
+        // Path traversal guard on template name
+        $template = basename(str_replace(['\\', "\0"], '', $template));
         extract($vars, EXTR_SKIP);
         $e = [App::class, 'e'];
         $csrf = \Sameh\Security\Csrf::token();
@@ -67,6 +87,7 @@ final class App
         }
         $flash = $_SESSION['flash'] ?? null;
         unset($_SESSION['flash']);
+        $appVersion = Config::version();
         require self::basePath() . '/templates/layout.php';
     }
 

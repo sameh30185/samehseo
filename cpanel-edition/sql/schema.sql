@@ -1,4 +1,4 @@
--- SAMEH 12.0 cPanel Edition schema
+-- SAMEH 12.0 cPanel Edition schema (12.0.0-rc1)
 -- Charset: utf8mb4 for Arabic
 
 SET NAMES utf8mb4;
@@ -30,10 +30,21 @@ CREATE TABLE IF NOT EXISTS sites (
   status VARCHAR(32) NOT NULL DEFAULT 'NOT_CONNECTED',
   connector_token VARCHAR(64) NULL,
   hmac_secret VARCHAR(128) NULL,
+  pairing_token VARCHAR(64) NULL,
+  pairing_expires_at DATETIME NULL,
+  pairing_consumed_at DATETIME NULL,
   last_health_at DATETIME NULL,
   last_discover_json LONGTEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_sites_pairing_token (pairing_token)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS hmac_nonces (
+  nonce VARCHAR(128) NOT NULL PRIMARY KEY,
+  expires_at INT UNSIGNED NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_hmac_nonces_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -64,7 +75,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 INSERT INTO settings (setting_key, setting_value) VALUES
   ('kill_switch', '0'),
   ('installed', '1'),
-  ('app_version', '12.0.0-cpanel')
+  ('app_version', '12.0.0-rc1')
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
 
 SET FOREIGN_KEY_CHECKS = 1;

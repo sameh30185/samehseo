@@ -1,0 +1,7 @@
+tests/last-run.json
+config.local.php
+config.php
+storage/nonces/*
+!storage/nonces/.gitkeep
+storage/rate/*
+!storage/rate/.gitkeep

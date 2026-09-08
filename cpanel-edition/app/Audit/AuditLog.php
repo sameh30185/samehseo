@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Sameh\Audit;
 
 use Sameh\Database;
+use Sameh\Security\Redactor;
 
 final class AuditLog
 {
@@ -11,6 +12,7 @@ final class AuditLog
     {
         try {
             $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $safe = Redactor::forAudit($details);
             $stmt = Database::pdo()->prepare(
                 'INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, details_json) VALUES (?, ?, ?, ?, ?, ?)'
             );
@@ -20,10 +22,10 @@ final class AuditLog
                 $entityType,
                 $entityId,
                 $ip,
-                $details ? json_encode($details, JSON_UNESCAPED_UNICODE) : null,
+                $safe ? json_encode($safe, JSON_UNESCAPED_UNICODE) : null,
             ]);
         } catch (\Throwable $e) {
-            // never break primary flow
+            // never break primary flow; never log exception that may contain secrets
         }
     }
 

@@ -1,37 +1,43 @@
-# SAMEH 12.0 — cPanel Edition
+# SAMEH 12.0 — cPanel Edition (`12.0.0-rc1`)
 
-Arabic-first PHP + MySQL control plane for **shared hosting (cPanel)**.  
+Arabic-first PHP + MySQL **Platform Foundation / Control Plane** for shared hosting (cPanel).  
 Zero Composer required in production. Thin WordPress connector plugin included.
 
-> VPS / Go+Next edition lives separately in `sameh-12.0/` — this package is the uploadable zip path.
+> **Phase honesty:** 12.0 = Platform Foundation / Control Plane.  
+> **NOT in this phase:** Missions, Hermes, autonomous SEO workforce, Page Factory, Growth, content generation.  
+> Those routes exist as honest stubs labeled NOT IMPLEMENTED.
 
 ## What's included
-- Installer (schema + Owner account)
-- Login / logout / sessions (HttpOnly cookies)
-- TOTP 2FA (pure-PHP, no Composer)
+- Installer with **preflight** (PHP, extensions, writable dirs, sessions, HTTPS, rewrite, DB)
+- Login / logout / sessions (HttpOnly + SameSite=Lax + Secure when HTTPS)
+- Session fixation prevention (`session_regenerate_id` on login)
+- TOTP 2FA (pure-PHP) — **secret sticky** until explicit Regenerate
+- Login + TOTP **rate limiting**
 - Command Center dashboard (real DB counts; zeros OK)
 - Sites: add (default **READ_ONLY**), list, detail
-- Pairing: connector token + HMAC shared secret
-- Bridge: Health + Discover against WP connector (signed REST)
+- Pairing: short-lived **one-time pairing token** + connector token + HMAC secret (secrets never logged)
+- Bridge: Health + Discover with **response validation** (status, Content-Type, JSON, required keys)
+- HMAC anti-replay: durable nonce store + timestamp skew / future rejection + `hash_equals`
 - Global Kill Switch
-- Audit log viewer
-- Honest stubs: Missions / Factory / Growth → **NOT IMPLEMENTED**
+- Audit log with **secret redaction**
+- CSRF, prepared statements, XSS escape, no open redirects, `.htaccess` blocks on `app/`, `sql/`, `templates/`, `storage/`
+- Honest stubs: Missions / Factory / Growth
 - WordPress plugin: `connector-plugin/sameh-connector/`
 
 ## Quick install (cPanel)
 
-**English summary** — full Arabic steps: see `INSTALL-CPANEL-AR.md`.
+Full Arabic steps: `INSTALL-CPANEL-AR.md`.
 
 1. Create MySQL database + user in cPanel  
 2. Create subdomain (e.g. `sameh.yourdomain.com`)  
 3. Set document root to this package's `public/` folder  
 4. Upload & extract `SAMEH-12.0-cpanel.zip`  
 5. Copy `config.example.php` → `config.local.php` and fill DB + `app_url`  
-6. Visit `https://sameh.yourdomain.com/install`  
+6. Visit `https://sameh.yourdomain.com/install` — fix any Preflight FAIL  
 7. Login → enable 2FA → Add Site → Pair → install WP plugin → Health / Discover  
 
 ### PHP requirements
-PHP 8.0+ with `pdo_mysql`, `curl`, `openssl`, `mbstring`. No Composer needed.
+PHP 8.0+ with `pdo_mysql`, `curl`, `openssl`, `json`, `mbstring`. No Composer.
 
 ### Config example
 ```php
@@ -53,6 +59,7 @@ Preferred config locations (first found wins):
 ## Directory layout
 ```
 sameh-12.0-cpanel/
+  VERSION                 ← 12.0.0-rc1
   README.md
   INSTALL-CPANEL-AR.md
   config.example.php
@@ -60,42 +67,38 @@ sameh-12.0-cpanel/
   app/
   templates/
   sql/schema.sql
+  storage/                ← nonces + rate limits (not web-accessible)
   connector-plugin/sameh-connector/
-  dist/
+  tests/run.php
+  dist/build-release.sh
 ```
 
 ## WordPress Connector
-- Plugin name: **SAMEH Connector**
-- REST namespace: `sameh-connector/v1`
-  - `GET health`
-  - `GET discover`
-  - `POST ping`
-- Headers: `X-Sameh-Timestamp`, `X-Sameh-Nonce`, `X-Sameh-Signature`
-- Signature payload: `timestamp.nonce.METHOD.path.body_hash` (HMAC-SHA256)
-- Rejects timestamps older than 5 minutes
-- One settings page only — no AI, no large admin UI
+- Plugin: **SAMEH Connector** `1.0.0-rc1`
+- REST: `sameh-connector/v1` — `health`, `discover`, `ping`
+- Headers: `X-Sameh-Timestamp`, `X-Sameh-Nonce`, `X-Sameh-Signature` (+ optional `X-Sameh-Site-Token`)
+- Signature: `timestamp.nonce.METHOD.path.body_hash` (HMAC-SHA256)
+- Anti-replay nonces (WP transients); rejects stale and future timestamps
+- No AI, no large admin UI
 
-Zip the `sameh-connector` folder for upload via WP Admin → Plugins → Add New → Upload, or copy into `wp-content/plugins/`.
+Zip: `dist/SAMEH-connector.zip` (also at repo root after build).
 
-## Security defaults
-- `password_hash` with Argon2id when available, else `PASSWORD_DEFAULT`
-- CSRF tokens on POST forms
-- Session cookies: HttpOnly, SameSite=Lax, Secure when `app_url` is https
-- Default site mode: **READ_ONLY**
-- No fake metrics — empty / NOT CONNECTED when no data
-
-## Local syntax check
+## Tests (PHP CLI)
 ```bash
+php tests/run.php
 find . -name '*.php' -print0 | xargs -0 -n1 php -l
 ```
 
-## Build zip
+## Build zip (reproducible)
 ```bash
-bash dist/build-zip.sh
-# → /workspace/SAMEH-12.0-cpanel.zip
+bash dist/build-release.sh
+# → cpanel-edition/dist/SAMEH-12.0-cpanel.zip
+# → cpanel-edition/dist/SAMEH-connector.zip
+# + copies to repo root
 ```
 
 ## Product principles
 - Arabic-first RTL UI
-- Honest empty states
+- Honest empty / stub states
 - Safe-by-default (READ ONLY + Kill Switch)
+- Stability + Security + Installability + Connector reliability

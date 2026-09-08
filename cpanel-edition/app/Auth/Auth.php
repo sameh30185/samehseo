@@ -5,6 +5,7 @@ namespace Sameh\Auth;
 
 use Sameh\Database;
 use Sameh\Security\Totp;
+use Sameh\Security\RateLimiter;
 use Sameh\Audit\AuditLog;
 
 final class Auth
@@ -35,7 +36,6 @@ final class Auth
         if (!self::check()) {
             \Sameh\App::redirect('/login');
         }
-        // Pending 2FA challenge
         if (!empty($_SESSION['totp_pending'])) {
             \Sameh\App::redirect('/2fa/verify');
         }
@@ -51,6 +51,14 @@ final class Auth
 
     public static function attempt(string $email, string $password): array
     {
+        $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'cli');
+        $limiter = new RateLimiter();
+        $bucket = 'login:' . strtolower(trim($email)) . ':' . $ip;
+        if (!$limiter->hit($bucket, 8, 900)) {
+            AuditLog::write(null, 'login_rate_limited', 'user', null, ['email' => $email]);
+            return ['ok' => false, 'error' => 'محاولات كثيرة — انتظر قليلاً / Too many attempts'];
+        }
+
         $stmt = Database::pdo()->prepare('SELECT * FROM users WHERE email = ? LIMIT 1');
         $stmt->execute([strtolower(trim($email))]);
         $user = $stmt->fetch();
@@ -58,6 +66,8 @@ final class Auth
             AuditLog::write(null, 'login_failed', 'user', null, ['email' => $email]);
             return ['ok' => false, 'error' => 'بيانات الدخول غير صحيحة / Invalid credentials'];
         }
+
+        $limiter->clear($bucket);
 
         if ((int)$user['totp_enabled'] === 1 && !empty($user['totp_secret'])) {
             $_SESSION['totp_pending'] = (int)$user['id'];
@@ -76,6 +86,14 @@ final class Auth
         if ($uid < 1) {
             return false;
         }
+        $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'cli');
+        $limiter = new RateLimiter();
+        $bucket = 'totp:' . $uid . ':' . $ip;
+        if (!$limiter->hit($bucket, 10, 600)) {
+            AuditLog::write($uid, '2fa_rate_limited', 'user', (string)$uid, []);
+            return false;
+        }
+
         $stmt = Database::pdo()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
         $stmt->execute([$uid]);
         $user = $stmt->fetch();
@@ -86,6 +104,7 @@ final class Auth
             AuditLog::write($uid, '2fa_failed', 'user', (string)$uid, []);
             return false;
         }
+        $limiter->clear($bucket);
         unset($_SESSION['totp_pending']);
         self::establishSession($uid);
         AuditLog::write($uid, 'login', 'user', (string)$uid, ['2fa' => true]);
@@ -101,16 +120,12 @@ final class Auth
 
     public static function logout(): void
     {
-        $uid = $_SESSION['user_id'] ?? null;
         $_SESSION = [];
         if (ini_get('session.use_cookies')) {
             $p = session_get_cookie_params();
             setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'] ?? '', (bool)$p['secure'], (bool)$p['httponly']);
         }
         session_destroy();
-        if ($uid) {
-            // session already destroyed; audit without session
-        }
     }
 
     public static function createOwner(string $email, string $password, string $displayName): int
@@ -134,5 +149,15 @@ final class Auth
     {
         $stmt = Database::pdo()->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?');
         $stmt->execute([$secret, $userId]);
+    }
+
+    /**
+     * Explicit reset: clear enabled TOTP so user can re-enroll.
+     */
+    public static function resetTotp(int $userId): void
+    {
+        $stmt = Database::pdo()->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?');
+        $stmt->execute([$userId]);
+        AuditLog::write($userId, '2fa_reset', 'user', (string)$userId, []);
     }
 }
