@@ -25,6 +25,14 @@ use Sameh\Actions\ExecutionService;
 use Sameh\Actions\VerifyRollbackService;
 use Sameh\Actions\FactoryService;
 use Sameh\Actions\GrowthService;
+use Sameh\AI\WorkerService;
+use Sameh\AI\JobQueue;
+use Sameh\Brain\ProjectBrain;
+use Sameh\Integrations\CsvImport;
+use Sameh\Integrations\SitemapFetch;
+use Sameh\Integrations\ResearchFetch;
+use Sameh\Security\TempElevation;
+use Sameh\Security\UrlGuard;
 
 final class Controllers
 {
@@ -129,6 +137,8 @@ final class Controllers
 
     public static function logout(): void
     {
+        // POST + CSRF only (GET /logout removed from router)
+        Csrf::requireValid();
         $u = Auth::user();
         if ($u) {
             AuditLog::write((int)$u['id'], 'logout', 'user', (string)$u['id'], []);
@@ -288,18 +298,49 @@ final class Controllers
     public static function dashboard(): void
     {
         Auth::requireLogin();
-        $sites = SiteRepository::count();
-        $pending = SiteRepository::pendingApprovalsCount();
-        $kill = Database::setting('kill_switch', '0') === '1';
+        $sitesCount = 0;
+        $pendingCount = 0;
+        $missionsRunning = 0;
+        $queueDepth = 0;
+        $localAiOnline = 0;
+        $recentMissions = [];
+        try {
+            $sitesCount = count(\Sameh\Sites\SiteRepository::all());
+            $pendingCount = (int) Database::pdo()->query(
+                "SELECT COUNT(*) FROM approvals WHERE status = 'pending' OR (decision IS NULL AND status = 'pending')"
+            )->fetchColumn();
+        } catch (\Throwable $e) {
+        }
+        try {
+            $missionsRunning = (int) Database::pdo()->query(
+                "SELECT COUNT(*) FROM missions WHERE status IN ('running','waiting_ai','draft')"
+            )->fetchColumn();
+            $site = App::activeSite();
+            if ($site) {
+                $recentMissions = MissionService::listForSite((int)$site['id'], 5);
+            }
+        } catch (\Throwable $e) {
+        }
+        try {
+            $st = WorkerService::statusSummary();
+            $queueDepth = (int)$st['queue_depth'];
+            $localAiOnline = (int)$st['online_workers'];
+        } catch (\Throwable $e) {
+        }
         App::render('dashboard', [
             'page' => 'dashboard',
             'title' => 'مركز القيادة / Command Center',
-            'sitesCount' => $sites,
-            'pendingCount' => $pending,
-            'killSwitch' => $kill,
-            'version' => Config::version(),
+            'sitesCount' => $sitesCount,
+            'pendingCount' => $pendingCount,
+            'missionsRunning' => $missionsRunning,
+            'queueDepth' => $queueDepth,
+            'localAiOnline' => $localAiOnline,
+            'recentMissions' => $recentMissions,
+            'activeSite' => App::activeSite(),
+            'killSwitch' => Database::setting('kill_switch', '0') === '1',
         ]);
     }
+
 
     public static function sitesList(): void
     {
@@ -437,7 +478,7 @@ final class Controllers
         if (!$site) {
             App::redirect('/sites');
         }
-        $res = BridgeClient::discover($site);
+        $res = BridgeClient::discoverV2($site);
         $u = Auth::user();
         if ($res['ok'] && is_array($res['data'])) {
             SiteRepository::saveDiscover($id, $res['data']);
@@ -480,6 +521,7 @@ final class Controllers
         $user = Auth::user();
         $ai = ProviderClient::config();
         unset($ai['api_key']); // never to template
+        $localAi = WorkerService::statusSummary();
         App::render('settings', [
             'page' => 'settings',
             'title' => 'الإعدادات / Settings',
@@ -489,6 +531,10 @@ final class Controllers
             'smtpConfigured' => Mailer::isSmtpConfigured(),
             'ai' => $ai,
             'aiHasKey' => Database::setting('ai_api_key_enc', '') !== '',
+            'localAi' => $localAi,
+            'aiWorkers' => WorkerService::listWorkers(),
+            'researchEnabled' => ResearchFetch::isEnabled(),
+            'researchAllowlist' => implode(', ', ResearchFetch::allowlist()),
         ]);
     }
 
@@ -530,7 +576,11 @@ final class Controllers
             $model = trim((string)($_POST['ai_model'] ?? 'gpt-4o-mini'));
             $key = (string)($_POST['ai_api_key'] ?? '');
             $timeout = (int)($_POST['ai_timeout_seconds'] ?? 30);
-            ProviderClient::saveSettings($base, $key, $model, $enabled, $timeout);
+            $save = ProviderClient::saveSettings($base, $key, $model, $enabled, $timeout);
+            if (empty($save['ok'])) {
+                App::flash('error', 'رابط السحابة مرفوض: ' . ($save['error'] ?? 'url_blocked'));
+                App::redirect('/settings');
+            }
             if (!empty($_POST['clear_api_key'])) {
                 ProviderClient::clearApiKey();
             }
@@ -540,7 +590,48 @@ final class Controllers
                 'base_url' => $base,
                 'model' => $model,
             ]);
-            App::flash('success', 'تم حفظ إعدادات الذكاء الاصطناعي / AI settings saved');
+            App::flash('success', 'تم حفظ إعدادات الذكاء الاصطناعي السحابي / Cloud AI settings saved');
+            App::redirect('/settings');
+        }
+
+        if ($action === 'local_ai_pair') {
+            Auth::requireOwner();
+            $u = Auth::user();
+            $name = trim((string)($_POST['worker_name'] ?? 'local-worker'));
+            $res = WorkerService::createPairToken($name, (int)$u['id']);
+            if (!$res['ok']) {
+                App::flash('error', $res['error'] ?? 'فشل');
+            } else {
+                App::flash('success', 'رمز الربط (يُعرض مرة واحدة): ' . $res['token']);
+            }
+            App::redirect('/settings');
+        }
+
+        if ($action === 'local_ai_revoke') {
+            Auth::requireOwner();
+            $u = Auth::user();
+            $wid = (int)($_POST['worker_id'] ?? 0);
+            WorkerService::revoke($wid, (int)$u['id']);
+            App::flash('success', 'تم إلغاء العامل / Worker revoked');
+            App::redirect('/settings');
+        }
+
+        if ($action === 'local_ai_test') {
+            Auth::requireOwner();
+            $st = WorkerService::statusSummary();
+            if ((int)$st['online_workers'] < 1) {
+                App::flash('error', 'لا يوجد Local AI Worker متصل / No online worker');
+            } else {
+                App::flash('success', 'عامل متصل — نماذج: ' . implode(', ', $st['models'] ?: ['—']) . ' — عمق الطابور: ' . $st['queue_depth']);
+            }
+            App::redirect('/settings');
+        }
+
+        if ($action === 'research_settings') {
+            Auth::requireOwner();
+            Database::setSetting('research_enabled', isset($_POST['research_enabled']) ? '1' : '0');
+            Database::setSetting('research_allowlist', trim((string)($_POST['research_allowlist'] ?? '')));
+            App::flash('success', 'تم حفظ إعدادات البحث / Research settings saved');
             App::redirect('/settings');
         }
 
@@ -594,8 +685,10 @@ final class Controllers
         $site = App::requireActiveSite();
         $type = (string)($_POST['type'] ?? 'full_audit');
         $title = (string)($_POST['title'] ?? '');
+        $goal = (string)($_POST['goal'] ?? '');
+        $src = (string)($_POST['analysis_source'] ?? 'rules');
         $u = Auth::user();
-        $res = MissionService::create((int)$site['id'], $type, $title, (int)$u['id']);
+        $res = MissionService::create((int)$site['id'], $type, $title, (int)$u['id'], $goal, $src);
         if (!$res['ok']) {
             App::flash('error', $res['error'] ?? 'فشل الإنشاء');
             App::redirect('/missions');
@@ -642,11 +735,22 @@ final class Controllers
         $site = App::requireActiveSite();
         $u = Auth::user();
         $useLlm = !empty($_POST['use_llm']) && ProviderClient::isEnabled();
+        // If mission marked hermes or checkbox
+        $m = MissionService::findForSite($id, (int)$site['id']);
+        if ($m && (string)($_POST['analysis_source'] ?? '') === 'hermes') {
+            try {
+                Database::pdo()->prepare("UPDATE missions SET analysis_source = 'hermes' WHERE id = ? AND site_id = ?")
+                    ->execute([$id, (int)$site['id']]);
+            } catch (\Throwable $e) {
+            }
+        }
         $res = MissionService::run($id, (int)$site['id'], (int)$u['id'], $useLlm);
         if (!$res['ok']) {
             App::flash('error', 'فشل التشغيل: ' . ($res['error'] ?? ''));
         } else {
-            App::flash('success', 'اكتمل التحقيق (تحليل حتمي' . ($useLlm ? '+LLM' : '') . ') / Investigation completed');
+            $src = $res['analysis_source'] ?? 'rules';
+            $label = $src === 'hermes' ? 'Hermes/Local AI' : 'Rules-only';
+            App::flash('success', 'اكتمل/تقدّم التحقيق (' . $label . ')');
         }
         App::redirect('/missions/' . $id);
     }
@@ -809,9 +913,20 @@ final class Controllers
         if (!empty($site['last_discover_json'])) {
             $discover = json_decode((string)$site['last_discover_json'], true) ?: [];
         }
-        $opps = GrowthService::deriveFromDiscover($discover);
-        $n = GrowthService::persistForSite((int)$site['id'], $opps, (int)$u['id']);
-        App::flash('success', "تم اشتقاق {$n} فرصة من Discover / Opportunities derived");
+        $brain = [];
+        try {
+            $brain = ProjectBrain::approvedBundle((int)$site['id']);
+        } catch (\Throwable $e) {
+            $brain = [];
+        }
+        $derived = GrowthService::deriveFromDiscover($discover, [], $brain);
+        $persisted = GrowthService::persistForSite((int)$site['id'], $derived, (int)$u['id']);
+        if (!empty($persisted['insufficient'])) {
+            App::flash('error', $persisted['message'] ?? GrowthService::MSG_INSUFFICIENT);
+        } else {
+            $n = (int)$persisted['count'];
+            App::flash('success', "تم اشتقاق/تحديث {$n} فرصة من Discover / Opportunities upserted");
+        }
         App::redirect('/growth');
     }
 
@@ -1016,6 +1131,179 @@ final class Controllers
         }
         App::flash('success', 'تم إنشاء خطة إجراءات مسودة');
         App::redirect('/plans/' . $res['plan_id']);
+    }
+
+
+    public static function missionStatusJson(int $id): void
+    {
+        Auth::requireLogin();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        MissionService::pollAndFinalize($id, (int)$site['id'], (int)$u['id']);
+        $m = MissionService::findForSite($id, (int)$site['id']);
+        if (!$m) {
+            App::json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+        App::json([
+            'ok' => true,
+            'id' => (int)$m['id'],
+            'status' => $m['status'],
+            'status_ar' => MissionService::statusLabelAr((string)$m['status']),
+            'analysis_source' => $m['analysis_source'] ?? 'rules',
+            'summary_ar' => $m['summary_ar'] ?? '',
+            'queue_depth' => JobQueue::queueDepth(),
+        ]);
+    }
+
+    public static function planRequestElevate(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        Auth::requireOwner();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = TempElevation::request(
+            (int)$site['id'],
+            (string)$site['name'],
+            (string)($_POST['confirm_site_name'] ?? ''),
+            isset($_POST['totp_code']) ? (string)$_POST['totp_code'] : null,
+            $id,
+            $u
+        );
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تم منح رفع مؤقت (5 دقائق) — نفّذ الآن مع تفعيل الخانة' : ($res['error'] ?? 'فشل'));
+        App::redirect('/plans/' . $id);
+    }
+
+    public static function brainGet(): void
+    {
+        Auth::requireLogin();
+        $site = App::activeSite();
+        $items = [];
+        if ($site) {
+            try {
+                $items = ProjectBrain::listForSite((int)$site['id']);
+            } catch (\Throwable $e) {
+                $items = [];
+            }
+        }
+        App::render('brain', [
+            'page' => 'brain',
+            'title' => 'عقل المشروع / Project Brain',
+            'activeSite' => $site,
+            'items' => $items,
+            'kinds' => ProjectBrain::KINDS,
+        ]);
+    }
+
+    public static function brainPost(): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = ProjectBrain::create(
+            (int)$site['id'],
+            (string)($_POST['kind'] ?? 'fact'),
+            (string)($_POST['label'] ?? ''),
+            (string)($_POST['value_text'] ?? ''),
+            !empty($_POST['is_inference']),
+            (int)$u['id']
+        );
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تمت الإضافة — وافق المالك على الحقائق' : ($res['error'] ?? 'فشل'));
+        App::redirect('/brain');
+    }
+
+    public static function brainApprove(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        Auth::requireOwner();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = ProjectBrain::approve($id, (int)$site['id'], (int)$u['id']);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تمت الموافقة على الحقيقة' : ($res['error'] ?? 'فشل'));
+        App::redirect('/brain');
+    }
+
+    public static function brainDelete(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = ProjectBrain::delete($id, (int)$site['id'], (int)$u['id']);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تم الحذف' : ($res['error'] ?? 'فشل'));
+        App::redirect('/brain');
+    }
+
+    public static function integrationsGet(): void
+    {
+        Auth::requireLogin();
+        $site = App::activeSite();
+        $gsc = ['connected' => false, 'message' => 'اختر موقعاً نشطاً'];
+        $sitemap = ['connected' => false, 'message' => 'اختر موقعاً نشطاً'];
+        if ($site) {
+            $gsc = CsvImport::statusForSite((int)$site['id']);
+            $sitemap = SitemapFetch::statusForSite((int)$site['id']);
+        }
+        App::render('integrations', [
+            'page' => 'integrations',
+            'title' => 'التكاملات / Integrations',
+            'activeSite' => $site,
+            'gsc' => $gsc,
+            'sitemap' => $sitemap,
+            'ga4' => ['connected' => false, 'message' => 'غير متصل — OAuth غير مُعد (لا مقاييس وهمية)'],
+            'ads' => ['connected' => false, 'message' => 'غير متصل — OAuth غير مُعد (لا مقاييس وهمية)'],
+            'research' => [
+                'enabled' => ResearchFetch::isEnabled(),
+                'allowlist' => ResearchFetch::allowlist(),
+            ],
+        ]);
+    }
+
+    public static function integrationsPost(): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $action = (string)($_POST['form_action'] ?? '');
+        if ($action === 'gsc_csv') {
+            $csv = (string)($_POST['csv_text'] ?? '');
+            if ($csv === '' && !empty($_FILES['csv_file']['tmp_name'])) {
+                $csv = (string)file_get_contents($_FILES['csv_file']['tmp_name']);
+            }
+            $res = CsvImport::importGscCsv((int)$site['id'], $csv, (int)$u['id']);
+            App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? ('تم استيراد ' . $res['rows'] . ' صف') : ($res['error'] ?? 'فشل'));
+        } elseif ($action === 'sitemap_fetch') {
+            $url = trim((string)($_POST['sitemap_url'] ?? ''));
+            $res = SitemapFetch::fetch($url, (int)$site['id'], (int)$u['id']);
+            App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? ('تم جلب ' . $res['count'] . ' رابط') : ($res['error'] ?? 'فشل'));
+        } else {
+            App::flash('error', 'إجراء غير معروف');
+        }
+        App::redirect('/integrations');
+    }
+
+    public static function downloadWorker(): void
+    {
+        Auth::requireLogin();
+        $zip = App::basePath() . '/dist/SAMEH-local-ai-worker-final.zip';
+        if (!is_file($zip)) {
+            // fallback zip on the fly from local-ai-worker dir
+            $dir = App::basePath() . '/local-ai-worker';
+            if (!is_dir($dir)) {
+                App::flash('error', 'حزمة العامل غير موجودة');
+                App::redirect('/settings');
+            }
+            App::flash('error', 'ابنِ الحزمة من dist أولاً — المجلد local-ai-worker/ متاح في التوزيعة');
+            App::redirect('/settings');
+        }
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="SAMEH-local-ai-worker-final.zip"');
+        header('Content-Length: ' . filesize($zip));
+        readfile($zip);
+        exit;
     }
 
     public static function stub(string $name): void

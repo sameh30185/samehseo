@@ -212,6 +212,17 @@ final class BridgeClient
         return self::request($site, 'GET', 'discover', '', self::DISCOVER_REQUIRED);
     }
 
+    /** Prefer richer discover/v2; fall back to v1 for older connectors. */
+    public static function discoverV2(array $site, int $page = 1, int $perPage = 25): array
+    {
+        $q = 'discover/v2?page=' . max(1, $page) . '&per_page=' . max(5, min(50, $perPage));
+        $res = self::request($site, 'GET', $q, '', self::DISCOVER_REQUIRED);
+        if (!empty($res['ok'])) {
+            return $res;
+        }
+        return self::discover($site);
+    }
+
     public static function ping(array $site): array
     {
         $body = json_encode(['ping' => true, 'ts' => time()], JSON_THROW_ON_ERROR);

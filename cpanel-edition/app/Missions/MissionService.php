@@ -8,6 +8,8 @@ use Sameh\Sites\SiteRepository;
 use Sameh\Agents\Director;
 use Sameh\Audit\AuditLog;
 use Sameh\Security\Redactor;
+use Sameh\AI\JobQueue;
+use Sameh\AI\WorkerService;
 
 /**
  * Mission state machine + deterministic investigation.
@@ -67,7 +69,21 @@ final class MissionService
         return (int)$stmt->fetchColumn() > 0;
     }
 
-    public static function create(int $siteId, string $type, string $title, ?int $userId): array
+    public static function statusLabelAr(string $status): string
+    {
+        return match ($status) {
+            'draft' => 'مسودة',
+            'running' => 'قيد التشغيل',
+            'decision_ready' => 'جاهزة للقرار',
+            'failed' => 'فشلت',
+            'cancelled' => 'ملغاة',
+            'completed' => 'مكتملة',
+            'waiting_ai' => 'بانتظار الذكاء المحلي',
+            default => $status,
+        };
+    }
+
+    public static function create(int $siteId, string $type, string $title, ?int $userId, string $goal = '', string $analysisSource = 'rules'): array
     {
         if (!isset(self::TYPES[$type])) {
             return ['ok' => false, 'error' => 'نوع مهمة غير معروف / Unknown mission type'];
@@ -75,11 +91,20 @@ final class MissionService
         if (self::hasActiveParallel($siteId, $type)) {
             return ['ok' => false, 'error' => 'مهمة مشابهة قيد التشغيل أو مسودة — امنع التكرار المتوازي / Parallel duplicate blocked'];
         }
-        $title = trim($title) !== '' ? trim($title) : self::TYPES[$type];
-        $stmt = Database::pdo()->prepare(
-            'INSERT INTO missions (site_id, type, title, status, created_by) VALUES (?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([$siteId, $type, $title, 'draft', $userId]);
+        $goal = trim($goal);
+        $title = trim($title) !== '' ? trim($title) : ($goal !== '' ? mb_substr($goal, 0, 120) : self::TYPES[$type]);
+        $analysisSource = $analysisSource === 'hermes' ? 'hermes' : 'rules';
+        try {
+            $stmt = Database::pdo()->prepare(
+                'INSERT INTO missions (site_id, type, title, status, created_by, analysis_source, goal_text) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([$siteId, $type, $title, 'draft', $userId, $analysisSource, $goal !== '' ? $goal : null]);
+        } catch (\Throwable $e) {
+            $stmt = Database::pdo()->prepare(
+                'INSERT INTO missions (site_id, type, title, status, created_by) VALUES (?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([$siteId, $type, $title, 'draft', $userId]);
+        }
         $id = (int) Database::pdo()->lastInsertId();
         AuditLog::write($userId, 'mission_create', 'mission', (string)$id, [
             'site_id' => $siteId,
@@ -185,10 +210,54 @@ final class MissionService
         }
 
         $only = self::TYPE_AGENTS[$m['type']] ?? null;
+        $source = (string)($m['analysis_source'] ?? 'rules');
+        if ($source !== 'hermes' && $useLlm) {
+            // Cloud enrich still rules-labeled unless hermes selected
+            $source = 'rules';
+        }
         try {
-            $result = Director::investigate($bundle, ['use_llm' => $useLlm, 'mission_id' => $missionId], $only);
+            if ($source === 'hermes') {
+                $st = WorkerService::statusSummary();
+                if ((int)($st['online_workers'] ?? 0) < 1) {
+                    Database::pdo()->prepare(
+                        "UPDATE missions SET status = 'failed', finished_at = NOW(), error_message = ? WHERE id = ?"
+                    )->execute(['لا يوجد Local AI Worker متصل — استخدم Rules-only أو Pair العامل', $missionId]);
+                    return ['ok' => false, 'error' => 'local_ai_offline'];
+                }
+                $agentNames = $only ?? ['technical', 'content', 'local', 'growth', 'qa'];
+                foreach ($agentNames as $an) {
+                    JobQueue::enqueue(
+                        $siteId,
+                        $an,
+                        [
+                            'mission_id' => $missionId,
+                            'goal' => (string)($m['goal_text'] ?? $m['title'] ?? ''),
+                            'evidence' => $bundle,
+                            'instruction' => 'حلّل الأدلة وأعد JSON: ok, summary_ar, findings[{code,severity,title,detail}] بدون أسرار.',
+                        ],
+                        $missionId,
+                        'agent_analyze',
+                        null,
+                        $userId,
+                        'mission-' . $missionId . '-' . $an,
+                        50
+                    );
+                }
+                try {
+                    Database::pdo()->prepare(
+                        "UPDATE missions SET status = 'waiting_ai', analysis_source = 'hermes' WHERE id = ?"
+                    )->execute([$missionId]);
+                } catch (\Throwable $e) {
+                    Database::pdo()->prepare("UPDATE missions SET status = 'running' WHERE id = ?")->execute([$missionId]);
+                }
+                // Short wait then merge whatever completed; remaining stay waiting_ai
+                $wait = JobQueue::waitMissionJobs($missionId, 8);
+                return self::finalizeHermesMission($missionId, $siteId, $userId, $evId, $wait);
+            }
 
-            // Persist per-agent runs
+            $result = Director::investigate($bundle, ['use_llm' => $useLlm, 'mission_id' => $missionId, 'analysis_source' => 'rules'], $only);
+            $result['summary_ar'] = "[Rules-only]\n" . $result['summary_ar'];
+
             foreach ($result['agents'] as $ar) {
                 try {
                     $stmt = Database::pdo()->prepare(
@@ -202,27 +271,38 @@ final class MissionService
                         json_encode(Redactor::forAudit($ar), JSON_UNESCAPED_UNICODE),
                     ]);
                 } catch (\Throwable $e) {
-                    // ignore per-run persist errors
                 }
             }
 
             $evIds = $evId ? [$evId] : [];
-            Database::pdo()->prepare(
-                "UPDATE missions SET status = 'decision_ready', finished_at = NOW(), summary_ar = ?, findings_json = ?, evidence_ids_json = ? WHERE id = ?"
-            )->execute([
-                $result['summary_ar'],
-                json_encode(Redactor::forAudit($result['findings']), JSON_UNESCAPED_UNICODE),
-                json_encode($evIds),
-                $missionId,
-            ]);
+            try {
+                Database::pdo()->prepare(
+                    "UPDATE missions SET status = 'decision_ready', finished_at = NOW(), summary_ar = ?, findings_json = ?, evidence_ids_json = ?, analysis_source = 'rules' WHERE id = ?"
+                )->execute([
+                    $result['summary_ar'],
+                    json_encode(Redactor::forAudit($result['findings']), JSON_UNESCAPED_UNICODE),
+                    json_encode($evIds),
+                    $missionId,
+                ]);
+            } catch (\Throwable $e) {
+                Database::pdo()->prepare(
+                    "UPDATE missions SET status = 'decision_ready', finished_at = NOW(), summary_ar = ?, findings_json = ?, evidence_ids_json = ? WHERE id = ?"
+                )->execute([
+                    $result['summary_ar'],
+                    json_encode(Redactor::forAudit($result['findings']), JSON_UNESCAPED_UNICODE),
+                    json_encode($evIds),
+                    $missionId,
+                ]);
+            }
 
             AuditLog::write($userId, 'mission_run', 'mission', (string)$missionId, [
                 'site_id' => $siteId,
                 'agents' => count($result['agents']),
                 'findings' => count($result['findings']),
+                'analysis_source' => 'rules',
             ]);
 
-            return ['ok' => true, 'result' => $result];
+            return ['ok' => true, 'result' => $result, 'analysis_source' => 'rules'];
         } catch (\Throwable $e) {
             Database::pdo()->prepare(
                 "UPDATE missions SET status = 'failed', finished_at = NOW(), error_message = ? WHERE id = ?"

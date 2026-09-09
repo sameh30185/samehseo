@@ -1,0 +1,8 @@
+{
+  "name": "sameh-local-ai-worker",
+  "version": "12.1.0",
+  "private": true,
+  "description": "SAMEH Local AI Worker — polls Core HTTPS queue and calls Ollama on Owner Windows only",
+  "main": "worker.js",
+  "engines": { "node": ">=18" }
+}

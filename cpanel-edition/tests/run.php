@@ -34,6 +34,9 @@ use Sameh\Actions\ApprovalService;
 use Sameh\Actions\ExecutionService;
 use Sameh\Actions\FactoryService;
 use Sameh\Actions\GrowthService;
+use Sameh\Security\UrlGuard;
+use Sameh\AI\SchemaValidator;
+use Sameh\AI\JobQueue;
 
 $pass = 0;
 $fail = 0;
@@ -55,7 +58,7 @@ function step(string $name, bool $ok, string $detail = ''): void
     }
 }
 
-echo "=== SAMEH 12.1 Professional Test Suite ===\n";
+echo "=== SAMEH 12.1.0 FINAL Test Suite ===\n";
 echo "Version: " . Config::version() . "\n";
 echo "PHP: " . PHP_VERSION . "\n";
 echo "Storage: $testStorage\n\n";
@@ -434,8 +437,9 @@ $disc = [
     'page_titles' => ['خدمة تنظيف الرياض', 'خدمة تنظيف الرياض المنزلية', 'عنّا'],
     'active_plugins' => ['akismet'],
 ];
-$opps = GrowthService::deriveFromDiscover($disc);
-step('Growth returns opportunities', count($opps) >= 1);
+$derived = GrowthService::deriveFromDiscover($disc);
+$opps = $derived['opportunities'] ?? [];
+step('Growth returns opportunities', count($opps) >= 1 && empty($derived['insufficient']));
 step('Growth opportunities sorted', count($opps) < 2 || GrowthService::compositeScore($opps[0]) >= GrowthService::compositeScore($opps[1]));
 $kinds = array_column($opps, 'kind');
 step('Growth includes thin or districts', in_array('thin_pages', $kinds, true) || in_array('thin_site', $kinds, true) || in_array('missing_districts', $kinds, true));
@@ -461,6 +465,98 @@ $routerSrc2 = file_get_contents(dirname(__DIR__) . '/app/Http/Router.php');
 step('Approvals and plans routes registered', str_contains($routerSrc2, 'approvalsList') && str_contains($routerSrc2, 'planExecute'));
 $msSrc2 = file_get_contents(dirname(__DIR__) . '/app/Missions/MissionService.php');
 step('Mission ends at decision_ready', str_contains($msSrc2, 'decision_ready'));
+
+
+// ---------- 17) FINAL 12.1.1 — security, worker contracts, factory block, growth dedupe, SSRF ----------
+$routerFinal = file_get_contents(dirname(__DIR__) . '/app/Http/Router.php');
+step('GET /logout removed from routes', !preg_match('/\'GET \/logout\'/', $routerFinal) && str_contains($routerFinal, "'POST /logout'"));
+step('Worker API routes registered', str_contains($routerFinal, '/api/worker/pair') && str_contains($routerFinal, '/api/worker/jobs/claim'));
+$logoutSrc = file_get_contents(dirname(__DIR__) . '/app/Http/Controllers.php');
+step('Logout requires CSRF', str_contains($logoutSrc, 'POST + CSRF only') && str_contains($logoutSrc, 'Csrf::requireValid()'));
+
+$qaBlock = FactoryService::runQa('<h1>A</h1><h1>B</h1>[foo]x', 'T', 's');
+step('Factory high QA / duplicate H1 blocks ok=false', $qaBlock['ok'] === false && !empty($qaBlock['blocking']));
+$blockedPlan = FactoryService::createDraftPlan(1, 'no_such_template', 'عنوان', 'slug', '', null);
+step('Factory invalid template hard-fails without plan', $blockedPlan['ok'] === false && str_contains((string)($blockedPlan['error'] ?? ''), 'قالب'));
+
+$ph = FactoryService::applyTemplate('moving_service', 'نقل عفش الرياض', '', 'نقل عفش');
+step('Factory golden template has no placeholder copy', !str_contains($ph, 'وصف الخدمة هنا') && str_contains($ph, 'نقل عفش'));
+
+$insuf = GrowthService::deriveFromDiscover([]);
+step('Growth insufficient evidence Arabic message', !empty($insuf['insufficient']) && ($insuf['message'] ?? '') === GrowthService::MSG_INSUFFICIENT);
+$fp1 = GrowthService::fingerprint(['kind' => 'thin_site', 'title' => 'X']);
+$fp2 = GrowthService::fingerprint(['kind' => 'thin_site', 'title' => 'X']);
+$fp3 = GrowthService::fingerprint(['kind' => 'thin_site', 'title' => 'Y']);
+step('Growth fingerprint stable+unique', $fp1 === $fp2 && $fp1 !== $fp3 && strlen($fp1) === 64);
+
+$ssrfLocal = UrlGuard::assertPublicHttps('http://127.0.0.1:11434');
+step('SSRF blocks localhost cloud URL', $ssrfLocal['ok'] === false);
+$ssrfPrivate = UrlGuard::assertPublicHttps('https://10.0.0.5/v1');
+step('SSRF blocks private IP host literal', $ssrfPrivate['ok'] === false);
+$ssrfHttp = UrlGuard::assertPublicHttps('http://api.openai.com/v1');
+step('SSRF rejects non-HTTPS public', $ssrfHttp['ok'] === false);
+$ssrfOk = UrlGuard::assertPublicHttps('https://api.openai.com/v1');
+step('SSRF allows public HTTPS', $ssrfOk['ok'] === true);
+
+$schemaBad = SchemaValidator::validateOrRepair('not json', ['ok' => 'bool', 'summary_ar' => 'string', 'findings' => 'array']);
+step('Schema validator fails bad JSON after repair attempt', $schemaBad['ok'] === false);
+$fenced = "```json\n" . json_encode(['ok' => true, 'summary_ar' => 'مرحبا', 'findings' => []], JSON_UNESCAPED_UNICODE) . "\n```";
+$schemaRepair = SchemaValidator::validateOrRepair($fenced, ['ok' => 'bool', 'summary_ar' => 'string', 'findings' => 'array']);
+step('Schema validator accepts fenced JSON', $schemaRepair['ok'] === true);
+
+$pf = Preflight::run();
+$openssl = null;
+foreach ($pf as $c) { if ($c['id'] === 'ext_openssl') { $openssl = $c; break; } }
+step('OpenSSL required in preflight', $openssl && !empty($openssl['critical']));
+
+$teSrc = file_get_contents(dirname(__DIR__) . '/app/Security/TempElevation.php');
+step('TempElevation requires Owner+2FA+site name+TTL', str_contains($teSrc, 'Owner only') && str_contains($teSrc, 'TTL_SECONDS') && str_contains($teSrc, 'hash_equals'));
+$exSrc2 = file_get_contents(dirname(__DIR__) . '/app/Actions/ExecutionService.php');
+step('Execute consumes TempElevation grant', str_contains($exSrc2, 'TempElevation::consume'));
+
+$jqSrc = file_get_contents(dirname(__DIR__) . '/app/AI/JobQueue.php');
+step('JobQueue lease exclusivity present', str_contains($jqSrc, 'FOR UPDATE') && str_contains($jqSrc, 'lease_owner'));
+step('JobQueue idempotency key', str_contains($jqSrc, 'idempotency_key'));
+$wsSrc = file_get_contents(dirname(__DIR__) . '/app/AI/WorkerService.php');
+step('Worker tokens hashed', str_contains($wsSrc, "hash('sha256'") && str_contains($wsSrc, 'token_hash'));
+step('Worker replay nonce table', str_contains($wsSrc, 'worker_pair_nonces'));
+
+$mig3 = dirname(__DIR__) . '/sql/migrations/003_12_1_1_local_ai.sql';
+$sql3 = file_get_contents($mig3);
+step('Migration 003 exists additive', is_string($sql3) && str_contains((string)$sql3, 'ai_workers') && str_contains((string)$sql3, 'ai_jobs'));
+step('Migration 003 no DROP sites/HMAC', !preg_match('/DROP\s+TABLE\s+(users|sites)/i', (string)$sql3) && !preg_match('/DROP\s+COLUMN\s+(hmac_secret|pairing_token)/i', (string)$sql3));
+step('Migration 003 growth fingerprint', str_contains((string)$sql3, 'fingerprint'));
+
+$msSrc3 = file_get_contents(dirname(__DIR__) . '/app/Missions/MissionService.php');
+step('Mission Hermes queue path', str_contains($msSrc3, 'JobQueue::enqueue') && str_contains($msSrc3, 'analysis_source'));
+step('Mission Rules-only label', str_contains($msSrc3, 'Rules-only'));
+
+$layout = file_get_contents(dirname(__DIR__) . '/templates/layout.php');
+step('Nav logout is POST form not GET link', str_contains($layout, 'action="/logout"') && !preg_match('/href="\/logout"/', $layout));
+step('No Telegram fake menu entry', !str_contains($layout, 'Telegram') && !str_contains($layout, 'تيليجرام'));
+step('Brain + Integrations in nav', str_contains($layout, '/brain') && str_contains($layout, '/integrations'));
+
+$connRest2 = file_get_contents(dirname(__DIR__) . '/connector-plugin/sameh-connector/includes/class-sameh-rest.php');
+step('Connector discover/v2 registered', str_contains($connRest2, 'discover/v2') && str_contains($connRest2, 'discover_v2'));
+step('Discover v2 includes media heuristics', str_contains($connRest2, "'media'") || str_contains($connRest2, '$media'));
+
+$aiSrc2 = file_get_contents(dirname(__DIR__) . '/app/AI/ProviderClient.php');
+step('Cloud AI uses UrlGuard', str_contains($aiSrc2, 'UrlGuard::assertPublicHttps'));
+step('Cloud AI rejects prompts with HMAC secrets', str_contains($aiSrc2, 'prompt_contains_secrets'));
+
+$workerJs = file_get_contents(dirname(__DIR__) . '/local-ai-worker/worker.js');
+step('Worker calls Ollama tags/chat/generate', str_contains($workerJs, '/api/tags') && str_contains($workerJs, '/api/chat') && str_contains($workerJs, '/api/generate'));
+step('Worker bat scripts exist', is_file(dirname(__DIR__) . '/local-ai-worker/start-worker.bat') && is_file(dirname(__DIR__) . '/local-ai-worker/shutdown-worker.bat') && is_file(dirname(__DIR__) . '/local-ai-worker/worker-status.bat'));
+step('Worker shutdown kills PID', str_contains(file_get_contents(dirname(__DIR__) . '/local-ai-worker/shutdown-worker.bat'), 'taskkill'));
+
+step('VERSION is 12.1.0-final-rc or 12.1.0', preg_match('/^12\.1\.0(-final-rc)?$/', Config::version()) === 1);
+
+$intentBlock = FactoryService::conflictChecks('عنوان مختلف تماما', 'x', [], [], 'نقل عفش الرياض');
+step('Factory intent conflict blocks', (static function($c){foreach($c as $i){if(($i['code']??'')==='intent_conflict')return true;}return false;})($intentBlock));
+
+$slugConf = FactoryService::conflictChecks('Hello', 'same-slug', [], ['same-slug'], '');
+step('Factory slug conflict high', (static function($c){foreach($c as $i){if(($i['code']??'')==='slug_conflict' && ($i['severity']??'')==='high')return true;}return false;})($slugConf));
+
 
 // Summary
 echo "\n=== SUMMARY ===\n";

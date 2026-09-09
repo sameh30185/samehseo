@@ -19,7 +19,7 @@ $isAuth = in_array($page ?? '', $authPages, true);
 <?php endif; ?>
 <?php if ($isAuth): ?>
   <div class="auth-wrap">
-    <div style="text-align:center;margin-bottom:1.5rem;font-size:1.4rem;font-weight:700;">SAMEH 12.1 <span style="color:var(--muted);font-size:0.85rem;">Professional</span></div>
+    <div style="text-align:center;margin-bottom:1.5rem;font-size:1.4rem;font-weight:700;">SAMEH 12.1 <span style="color:var(--muted);font-size:0.85rem;">Professional FINAL</span></div>
     <?php if (!empty($flash)): ?>
       <div class="flash <?= \Sameh\App::e($flash['type']) ?>"><?= \Sameh\App::e($flash['message']) ?></div>
     <?php endif; ?>
@@ -52,14 +52,19 @@ $isAuth = in_array($page ?? '', $authPages, true);
         <a href="/dashboard" class="<?= ($page ?? '') === 'dashboard' ? 'active' : '' ?>">مركز القيادة</a>
         <a href="/sites" class="<?= ($page ?? '') === 'sites' ? 'active' : '' ?>">المواقع / Sites</a>
         <a href="/missions" class="<?= ($page ?? '') === 'missions' ? 'active' : '' ?>">المهام / Missions</a>
+        <a href="/brain" class="<?= ($page ?? '') === 'brain' ? 'active' : '' ?>">عقل المشروع / Brain</a>
         <a href="/factory" class="<?= ($page ?? '') === 'factory' ? 'active' : '' ?>">المصنع / Factory</a>
         <a href="/growth" class="<?= ($page ?? '') === 'growth' ? 'active' : '' ?>">النمو / Growth</a>
         <a href="/plans" class="<?= ($page ?? '') === 'plans' ? 'active' : '' ?>">الخطط / Plans</a>
         <a href="/approvals" class="<?= ($page ?? '') === 'approvals' ? 'active' : '' ?>">الموافقات / Approvals</a>
+        <a href="/integrations" class="<?= ($page ?? '') === 'integrations' ? 'active' : '' ?>">التكاملات</a>
         <a href="/audit" class="<?= ($page ?? '') === 'audit' ? 'active' : '' ?>">التدقيق / Audit</a>
         <a href="/settings" class="<?= ($page ?? '') === 'settings' ? 'active' : '' ?>">الإعدادات</a>
         <a href="/2fa/setup">2FA</a>
-        <a href="/logout">خروج / Logout</a>
+        <form method="post" action="/logout" style="margin:0.5rem 0 0;">
+          <?= \Sameh\Security\Csrf::field() ?>
+          <button type="submit" class="secondary" style="width:100%;">خروج / Logout</button>
+        </form>
       </nav>
       <div class="meta">
         <?php if (!empty($user)): ?>

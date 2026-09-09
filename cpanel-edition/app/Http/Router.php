@@ -18,10 +18,11 @@ final class Router
             $uri = rtrim($uri, '/') ?: '/';
         }
 
-        // Install gate — allow recovery + login paths when installed
         $needsInstall = !Config::isConfigured() || !Database::isInstalled();
         $publicWhenInstalling = ['/install', '/'];
-        if ($needsInstall && !in_array($uri, $publicWhenInstalling, true)) {
+        // Worker API allowed only when installed (needs tables)
+        $workerApi = str_starts_with($uri, '/api/worker');
+        if ($needsInstall && !in_array($uri, $publicWhenInstalling, true) && !$workerApi) {
             App::redirect('/install');
         }
         if ($needsInstall && $uri === '/') {
@@ -32,12 +33,33 @@ final class Router
             App::redirect('/dashboard');
         }
 
+        // Worker API (no session)
+        if ($uri === '/api/worker/pair' && $method === 'POST') {
+            WorkerApi::pair();
+            return;
+        }
+        if ($uri === '/api/worker/heartbeat' && $method === 'POST') {
+            WorkerApi::heartbeat();
+            return;
+        }
+        if ($uri === '/api/worker/jobs/claim' && $method === 'POST') {
+            WorkerApi::claim();
+            return;
+        }
+        if (preg_match('#^/api/worker/jobs/(\d+)/complete$#', $uri, $m) && $method === 'POST') {
+            WorkerApi::complete((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/api/worker/jobs/(\d+)/fail$#', $uri, $m) && $method === 'POST') {
+            WorkerApi::fail((int)$m[1]);
+            return;
+        }
+
         $routes = [
             'GET /install' => [Controllers::class, 'installGet'],
             'POST /install' => [Controllers::class, 'installPost'],
             'GET /login' => [Controllers::class, 'loginGet'],
             'POST /login' => [Controllers::class, 'loginPost'],
-            'GET /logout' => [Controllers::class, 'logout'],
             'POST /logout' => [Controllers::class, 'logout'],
             'GET /recovery' => [Controllers::class, 'recoveryRequestGet'],
             'POST /recovery' => [Controllers::class, 'recoveryRequestPost'],
@@ -66,6 +88,11 @@ final class Router
             'POST /growth/refresh' => [Controllers::class, 'growthRefresh'],
             'GET /approvals' => [Controllers::class, 'approvalsList'],
             'GET /plans' => [Controllers::class, 'plansList'],
+            'GET /brain' => [Controllers::class, 'brainGet'],
+            'POST /brain' => [Controllers::class, 'brainPost'],
+            'GET /integrations' => [Controllers::class, 'integrationsGet'],
+            'POST /integrations' => [Controllers::class, 'integrationsPost'],
+            'GET /download/local-ai-worker' => [Controllers::class, 'downloadWorker'],
         ];
 
         $key = $method . ' ' . $uri;
@@ -75,6 +102,14 @@ final class Router
                 $handler();
                 return;
             }
+        }
+
+        // GET /logout removed — force POST+CSRF
+        if ($uri === '/logout' && $method === 'GET') {
+            http_response_code(405);
+            header('Allow: POST');
+            App::flash('error', 'الخروج عبر POST + CSRF فقط / Logout requires POST + CSRF');
+            App::redirect('/dashboard');
         }
 
         if (preg_match('#^/sites/(\d+)$#', $uri, $m) && $method === 'GET') {
@@ -101,6 +136,10 @@ final class Router
             Controllers::missionDetail((int)$m[1]);
             return;
         }
+        if (preg_match('#^/missions/(\d+)/status\.json$#', $uri, $m) && $method === 'GET') {
+            Controllers::missionStatusJson((int)$m[1]);
+            return;
+        }
         if (preg_match('#^/missions/(\d+)/run$#', $uri, $m) && $method === 'POST') {
             Controllers::missionRun((int)$m[1]);
             return;
@@ -113,8 +152,6 @@ final class Router
             Controllers::missionResume((int)$m[1]);
             return;
         }
-
-
         if (preg_match('#^/approvals/(\d+)$#', $uri, $m) && $method === 'GET') {
             Controllers::approvalDetail((int)$m[1]);
             return;
@@ -139,6 +176,10 @@ final class Router
             Controllers::planExecute((int)$m[1]);
             return;
         }
+        if (preg_match('#^/plans/(\d+)/request-elevate$#', $uri, $m) && $method === 'POST') {
+            Controllers::planRequestElevate((int)$m[1]);
+            return;
+        }
         if (preg_match('#^/plans/(\d+)/rollback$#', $uri, $m) && $method === 'POST') {
             Controllers::planRollback((int)$m[1]);
             return;
@@ -153,6 +194,14 @@ final class Router
         }
         if (preg_match('#^/growth/(\d+)/plan$#', $uri, $m) && $method === 'POST') {
             Controllers::growthOppToPlan((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/brain/(\d+)/approve$#', $uri, $m) && $method === 'POST') {
+            Controllers::brainApprove((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/brain/(\d+)/delete$#', $uri, $m) && $method === 'POST') {
+            Controllers::brainDelete((int)$m[1]);
             return;
         }
 

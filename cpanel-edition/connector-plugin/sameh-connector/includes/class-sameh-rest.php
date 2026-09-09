@@ -27,6 +27,11 @@ class Sameh_Connector_REST
             'callback' => [__CLASS__, 'discover'],
             'permission_callback' => [__CLASS__, 'permission'],
         ]);
+        register_rest_route(self::NS, '/discover/v2', [
+            'methods' => 'GET',
+            'callback' => [__CLASS__, 'discover_v2'],
+            'permission_callback' => [__CLASS__, 'permission'],
+        ]);
         register_rest_route(self::NS, '/ping', [
             'methods' => 'POST',
             'callback' => [__CLASS__, 'ping'],
@@ -131,6 +136,75 @@ class Sameh_Connector_REST
                 return $t['title'];
             }, $titles),
         ];
+    }
+
+
+    public static function discover_v2(WP_REST_Request $request)
+    {
+        $base = self::discover($request);
+        if (is_wp_error($base)) {
+            return $base;
+        }
+        $page = max(1, (int) $request->get_param('page'));
+        $per = min(50, max(5, (int) ($request->get_param('per_page') ?: 25)));
+        $offset = ($page - 1) * $per;
+
+        $sample = get_posts([
+            'post_type' => ['page', 'post'],
+            'post_status' => ['publish', 'draft'],
+            'numberposts' => $per,
+            'offset' => $offset,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ]);
+        $items = [];
+        foreach ($sample as $p) {
+            $items[] = [
+                'id' => (int) $p->ID,
+                'title' => $p->post_title,
+                'slug' => $p->post_name,
+                'status' => $p->post_status,
+                'type' => $p->post_type,
+                'modified' => $p->post_modified_gmt,
+            ];
+        }
+
+        // Media heuristics (alt + file basename as weak hash)
+        $media = [];
+        $atts = get_posts([
+            'post_type' => 'attachment',
+            'post_status' => 'inherit',
+            'numberposts' => 40,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ]);
+        foreach ($atts as $a) {
+            $alt = (string) get_post_meta($a->ID, '_wp_attachment_image_alt', true);
+            $file = (string) get_post_meta($a->ID, '_wp_attached_file', true);
+            $media[] = [
+                'id' => (int) $a->ID,
+                'alt' => $alt,
+                'file' => $file,
+                'hash' => $file !== '' ? md5($file) : ('id-' . $a->ID),
+                'url' => wp_get_attachment_url($a->ID) ?: '',
+            ];
+        }
+
+        $counts = $base['counts'];
+        $counts['attachments'] = (int) (wp_count_posts('attachment')->inherit ?? 0);
+
+        $base['api_version'] = 'discover/v2';
+        $base['page'] = $page;
+        $base['per_page'] = $per;
+        $base['items'] = $items;
+        $base['sample_titles'] = $items;
+        $base['page_titles'] = array_map(static function ($t) {
+            return is_array($t) ? ($t['title'] ?? '') : (string) $t;
+        }, $items);
+        $base['media'] = $media;
+        $base['counts'] = $counts;
+        $base['rank_math_active'] = in_array('seo-by-rank-math', $base['active_plugins'], true);
+        return $base;
     }
 
     public static function ping(WP_REST_Request $request)

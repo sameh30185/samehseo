@@ -19,15 +19,24 @@
     </form>
   <?php endif; ?>
   <?php if ($plan['status'] === 'approved'): ?>
-    <form method="post" action="/plans/<?= (int)$plan['id'] ?>/execute">
+    <h3>رفع مؤقت (READ_ONLY)</h3>
+    <p style="font-size:0.9rem;color:var(--muted);">لا يكفي وضع علامة فقط. المطلوب: مالك + 2FA + كتابة اسم الموقع + TTL قصيرة ثم التنفيذ.</p>
+    <form method="post" action="/plans/<?= (int)$plan['id'] ?>/request-elevate">
       <?= \Sameh\Security\Csrf::field() ?>
-      <label><input type="checkbox" name="temporary_elevate" value="1"> رفع مؤقت للتنفيذ رغم READ_ONLY (يُسجَّل في التدقيق)</label>
+      <label>اكتب اسم الموقع للتأكيد: <strong><?= \Sameh\App::e($activeSite['name'] ?? '') ?></strong></label>
+      <input type="text" name="confirm_site_name" required autocomplete="off">
+      <label>رمز 2FA</label>
+      <input type="text" name="totp_code" inputmode="numeric" required autocomplete="one-time-code">
+      <button type="submit">منح رفع مؤقت (5 دقائق)</button>
+    </form>
+    <form method="post" action="/plans/<?= (int)$plan['id'] ?>/execute" style="margin-top:1rem;">
+      <?= \Sameh\Security\Csrf::field() ?>
+      <label><input type="checkbox" name="temporary_elevate" value="1"> استخدم الرفع المؤقت الممنوح أعلاه</label>
       <?php if (!empty($plan['needs_extra_approval'])): ?>
         <label><input type="checkbox" name="confirm_extra" value="1" required> تأكيد إضافي للنشر/الدفعات</label>
       <?php endif; ?>
       <button type="submit">تنفيذ / Execute</button>
     </form>
-    <p style="color:var(--muted);font-size:0.9rem;">الوضع الافتراضي READ_ONLY يرفض التنفيذ برسالة عربية واضحة ما لم تفعّل الرفع المؤقت أو READ_WRITE.</p>
   <?php endif; ?>
   <?php if (in_array($plan['status'], ['verified', 'failed', 'executing'], true)): ?>
     <form method="post" action="/plans/<?= (int)$plan['id'] ?>/rollback" style="display:inline;">

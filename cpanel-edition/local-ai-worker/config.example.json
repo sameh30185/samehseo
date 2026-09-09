@@ -1,0 +1,9 @@
+{
+  "core_base_url": "https://your-cpanel-domain.example",
+  "worker_token": "sw_PASTE_PAIR_TOKEN_HERE",
+  "ollama_base_url": "http://127.0.0.1:11434",
+  "prefer_hermes": true,
+  "poll_ms": 2500,
+  "idle_sleep_ms": 5000,
+  "request_timeout_ms": 120000
+}

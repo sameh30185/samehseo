@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SAMEH Connector
  * Description: Thin signed bridge between WordPress and SAMEH 12.1 Core (cPanel Edition). No AI. Settings + REST only.
- * Version: 1.1.0-dev
+ * Version: 1.2.0-final
  * Author: SAMEH
  * Text Domain: sameh-connector
  * Requires at least: 5.8
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SAMEH_CONNECTOR_VERSION', '1.1.0-dev');
+define('SAMEH_CONNECTOR_VERSION', '1.2.0-final');
 define('SAMEH_CONNECTOR_FILE', __FILE__);
 define('SAMEH_CONNECTOR_DIR', plugin_dir_path(__FILE__));
 

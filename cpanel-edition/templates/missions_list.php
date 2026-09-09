@@ -3,40 +3,50 @@
   <div class="flash error">اختر موقعاً نشطاً من الشريط الجانبي أو <a href="/sites">المواقع</a>.</div>
 <?php else: ?>
   <p>الموقع النشط: <strong><?= \Sameh\App::e($activeSite['name']) ?></strong></p>
+
   <div class="card">
-    <h2>إنشاء مهمة / Create mission</h2>
+    <h2>① الهدف من الشركة</h2>
     <form method="post" action="/missions">
       <?= \Sameh\Security\Csrf::field() ?>
-      <label>النوع / Type</label>
+      <label>ماذا تريد من الشركة؟</label>
+      <textarea name="goal" rows="3" required placeholder="مثال: راجع صفحات النقل في الرياض واقترح مسودات أحياء ناقصة دون نشر"></textarea>
+      <label>نوع المهمة</label>
       <select name="type" required>
         <?php foreach ($types as $k => $label): ?>
           <option value="<?= \Sameh\App::e($k) ?>"><?= \Sameh\App::e($label) ?></option>
         <?php endforeach; ?>
       </select>
-      <label>العنوان (اختياري)</label>
-      <input type="text" name="title" placeholder="اختياري">
-      <button type="submit">إنشاء</button>
+      <label>مصدر التحليل</label>
+      <select name="analysis_source">
+        <option value="rules">Rules-only (حتمي — بدون Local AI)</option>
+        <option value="hermes">Hermes عبر Local AI Worker (طابور)</option>
+      </select>
+      <label>عنوان مختصر (اختياري)</label>
+      <input type="text" name="title" placeholder="يُشتق من الهدف إن تُرك فارغاً">
+      <button type="submit">② إنشاء المهمة</button>
     </form>
   </div>
+
   <div class="card">
-    <h2>القائمة</h2>
+    <h2>③ بطاقات المهام</h2>
     <?php if (empty($missions)): ?>
       <p>لا مهام بعد.</p>
     <?php else: ?>
-      <table>
-        <thead><tr><th>#</th><th>العنوان</th><th>النوع</th><th>الحالة</th><th></th></tr></thead>
-        <tbody>
+      <div class="grid">
         <?php foreach ($missions as $m): ?>
-          <tr>
-            <td><?= (int)$m['id'] ?></td>
-            <td><?= \Sameh\App::e($m['title']) ?></td>
-            <td><?= \Sameh\App::e($m['type']) ?></td>
-            <td><?= \Sameh\App::e($m['status']) ?></td>
-            <td><a href="/missions/<?= (int)$m['id'] ?>">عرض</a></td>
-          </tr>
+          <div class="card" style="margin:0;">
+            <h3 style="margin-top:0;"><a href="/missions/<?= (int)$m['id'] ?>"><?= \Sameh\App::e($m['title']) ?></a></h3>
+            <p>
+              <span class="badge"><?= \Sameh\App::e(\Sameh\Missions\MissionService::statusLabelAr((string)$m['status'])) ?></span>
+              <span class="badge"><?= (($m['analysis_source'] ?? 'rules') === 'hermes') ? 'Hermes' : 'Rules-only' ?></span>
+            </p>
+            <?php if (!empty($m['goal_text'])): ?>
+              <p style="color:var(--muted);font-size:0.9rem;"><?= \Sameh\App::e(mb_substr((string)$m['goal_text'], 0, 160)) ?></p>
+            <?php endif; ?>
+            <p><a href="/missions/<?= (int)$m['id'] ?>">فتح الخطوة التالية →</a></p>
+          </div>
         <?php endforeach; ?>
-        </tbody>
-      </table>
+      </div>
     <?php endif; ?>
   </div>
 <?php endif; ?>

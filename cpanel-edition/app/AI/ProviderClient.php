@@ -6,6 +6,7 @@ namespace Sameh\AI;
 use Sameh\Database;
 use Sameh\Crypto\SecretBox;
 use Sameh\Security\Redactor;
+use Sameh\Security\UrlGuard;
 
 /**
  * OpenAI-compatible chat completions client.
@@ -33,8 +34,16 @@ final class ProviderClient
         ];
     }
 
-    public static function saveSettings(string $baseUrl, string $apiKey, string $model, bool $enabled, ?int $timeout = null): void
+    public static function saveSettings(string $baseUrl, string $apiKey, string $model, bool $enabled, ?int $timeout = null): array
     {
+        $baseUrl = trim($baseUrl);
+        if ($baseUrl !== '') {
+            $guard = UrlGuard::assertPublicHttps($baseUrl);
+            if (!$guard['ok']) {
+                return ['ok' => false, 'error' => $guard['error'] ?? 'url_blocked'];
+            }
+            $baseUrl = $guard['normalized'] ?? rtrim($baseUrl, '/');
+        }
         Database::setSetting('ai_base_url', rtrim($baseUrl, '/'));
         Database::setSetting('ai_model', $model !== '' ? $model : 'gpt-4o-mini');
         Database::setSetting('ai_cloud_enabled', $enabled ? '1' : '0');
@@ -44,6 +53,7 @@ final class ProviderClient
         if ($apiKey !== '') {
             Database::setSetting('ai_api_key_enc', SecretBox::encrypt($apiKey));
         }
+        return ['ok' => true];
     }
 
     public static function clearApiKey(): void
@@ -68,9 +78,14 @@ final class ProviderClient
 
         $safeMessages = [];
         foreach ($messages as $m) {
+            $content = (string)($m['content'] ?? '');
+            // Never send HMAC/WP credentials to AI
+            if (preg_match('/hmac_secret|connector_token|pairing_token|shared_secret|Authorization:\s*Bearer/i', $content)) {
+                return ['ok' => false, 'error' => 'prompt_contains_secrets'];
+            }
             $safeMessages[] = [
                 'role' => (string)($m['role'] ?? 'user'),
-                'content' => Redactor::redactString((string)($m['content'] ?? '')),
+                'content' => Redactor::redactString($content),
             ];
         }
 
@@ -124,8 +139,9 @@ final class ProviderClient
 
     private static function httpPostJson(string $url, string $payload, string $apiKey, int $timeout): array
     {
-        if (!preg_match('#^https?://#i', $url)) {
-            return ['ok' => false, 'error' => 'invalid_url'];
+        $guard = UrlGuard::assertPublicHttps($url);
+        if (!$guard['ok']) {
+            return ['ok' => false, 'error' => $guard['error'] ?? 'url_blocked'];
         }
         $ch = curl_init($url);
         curl_setopt_array($ch, [

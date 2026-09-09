@@ -8,6 +8,7 @@ use Sameh\Sites\SiteRepository;
 use Sameh\Connector\BridgeClient;
 use Sameh\Audit\AuditLog;
 use Sameh\Security\Redactor;
+use Sameh\Security\TempElevation;
 
 /**
  * Execute approved plans via Connector Bridge. Respects READ_ONLY + Kill Switch.
@@ -79,6 +80,14 @@ final class ExecutionService
         }
 
         if ($temporaryElevate) {
+            // Require a previously granted TempElevation (Owner+2FA+site name+TTL) — no checkbox-only bypass
+            if ($userId === null || !TempElevation::consume($siteId, (int)$userId, $planId)) {
+                AuditLog::write($userId, 'temp_elevate_denied', 'action_plan', (string)$planId, [
+                    'site_id' => $siteId,
+                    'reason' => 'missing_or_expired_elevation',
+                ], $siteId);
+                return ['ok' => false, 'error' => 'الرفع المؤقت يتطلب موافقة مالك + 2FA + كتابة اسم الموقع مسبقاً / Temp elevation grant required'];
+            }
             AuditLog::write($userId, 'temp_elevate_execute', 'action_plan', (string)$planId, [
                 'site_id' => $siteId,
                 'mode' => $site['mode'] ?? '',
