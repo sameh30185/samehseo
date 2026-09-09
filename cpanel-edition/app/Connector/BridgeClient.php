@@ -218,6 +218,77 @@ final class BridgeClient
         return self::request($site, 'POST', 'ping', $body, self::PING_REQUIRED);
     }
 
+
+    /** @var list<string> */
+    public const DRAFT_REQUIRED = ['ok', 'post_id'];
+
+    /** @var list<string> */
+    public const POST_REQUIRED = ['ok', 'post'];
+
+    public static function getPost(array $site, int $postId): array
+    {
+        return self::request($site, 'GET', 'get_post/' . $postId, '', self::POST_REQUIRED);
+    }
+
+    public static function createDraft(array $site, array $params): array
+    {
+        $body = json_encode([
+            'title' => (string)($params['title'] ?? ''),
+            'slug' => (string)($params['slug'] ?? ''),
+            'content' => (string)($params['content'] ?? ''),
+            'status' => 'draft',
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        return self::request($site, 'POST', 'create_draft', $body, self::DRAFT_REQUIRED);
+    }
+
+    public static function updateDraft(array $site, array $params): array
+    {
+        $payload = [
+            'post_id' => (int)($params['post_id'] ?? 0),
+        ];
+        foreach (['title', 'content', 'excerpt', 'kind', 'link_ops', 'meta'] as $k) {
+            if (array_key_exists($k, $params) && $params[$k] !== null) {
+                $payload[$k] = $params[$k];
+            }
+        }
+        $body = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        return self::request($site, 'POST', 'update_draft', $body, self::DRAFT_REQUIRED);
+    }
+
+    public static function updateRankMath(array $site, array $params): array
+    {
+        $body = json_encode([
+            'post_id' => (int)($params['post_id'] ?? 0),
+            'meta' => $params['meta'] ?? [],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        return self::request($site, 'POST', 'update_rank_math', $body, ['ok']);
+    }
+
+    /**
+     * Refuse publish unless confirm_publish and Core high-risk approved flag.
+     */
+    public static function changePostStatus(array $site, array $params, bool $highRiskApproved = false): array
+    {
+        $status = (string)($params['status'] ?? '');
+        $confirm = !empty($params['confirm_publish']);
+        if (in_array($status, ['publish', 'trash'], true) && (!$confirm || !$highRiskApproved)) {
+            return [
+                'ok' => false,
+                'http_code' => 0,
+                'data' => null,
+                'raw' => null,
+                'error' => 'Publish/trash requires confirm_publish and approved high-risk flag',
+            ];
+        }
+        $body = json_encode([
+            'post_id' => (int)($params['post_id'] ?? 0),
+            'status' => $status,
+            'confirm_publish' => $confirm ? 1 : 0,
+            'high_risk_approved' => $highRiskApproved ? 1 : 0,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        return self::request($site, 'POST', 'change_post_status', $body, ['ok']);
+    }
+
     private static function extractHeader(string $rawHeaders, string $name): ?string
     {
         $lines = preg_split('/\r\n|\n|\r/', $rawHeaders) ?: [];

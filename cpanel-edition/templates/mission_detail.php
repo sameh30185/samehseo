@@ -30,6 +30,13 @@
       <button type="submit">استئناف → مسودة</button>
     </form>
   <?php endif; ?>
+
+  <?php if (in_array($mission['status'], ['decision_ready', 'completed'], true)): ?>
+    <form method="post" action="/missions/<?= (int)$mission['id'] ?>/action-plan" style="display:inline;">
+      <?= \Sameh\Security\Csrf::field() ?>
+      <button type="submit">إنشاء خطة إجراءات / Create action plan</button>
+    </form>
+  <?php endif; ?>
   <p style="margin-top:0.75rem;"><a href="/missions">← قائمة المهام</a></p>
 </div>
 

@@ -54,6 +54,8 @@ $isAuth = in_array($page ?? '', $authPages, true);
         <a href="/missions" class="<?= ($page ?? '') === 'missions' ? 'active' : '' ?>">المهام / Missions</a>
         <a href="/factory" class="<?= ($page ?? '') === 'factory' ? 'active' : '' ?>">المصنع / Factory</a>
         <a href="/growth" class="<?= ($page ?? '') === 'growth' ? 'active' : '' ?>">النمو / Growth</a>
+        <a href="/plans" class="<?= ($page ?? '') === 'plans' ? 'active' : '' ?>">الخطط / Plans</a>
+        <a href="/approvals" class="<?= ($page ?? '') === 'approvals' ? 'active' : '' ?>">الموافقات / Approvals</a>
         <a href="/audit" class="<?= ($page ?? '') === 'audit' ? 'active' : '' ?>">التدقيق / Audit</a>
         <a href="/settings" class="<?= ($page ?? '') === 'settings' ? 'active' : '' ?>">الإعدادات</a>
         <a href="/2fa/setup">2FA</a>

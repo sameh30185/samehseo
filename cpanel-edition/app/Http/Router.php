@@ -60,8 +60,12 @@ final class Router
             'POST /missions' => [Controllers::class, 'missionsCreatePost'],
             'GET /factory' => [Controllers::class, 'factory'],
             'POST /factory/mission' => [Controllers::class, 'factoryCreateMission'],
+            'POST /factory/plan' => [Controllers::class, 'factoryCreatePlan'],
             'GET /growth' => [Controllers::class, 'growth'],
             'POST /growth/mission' => [Controllers::class, 'growthCreateMission'],
+            'POST /growth/refresh' => [Controllers::class, 'growthRefresh'],
+            'GET /approvals' => [Controllers::class, 'approvalsList'],
+            'GET /plans' => [Controllers::class, 'plansList'],
         ];
 
         $key = $method . ' ' . $uri;
@@ -107,6 +111,48 @@ final class Router
         }
         if (preg_match('#^/missions/(\d+)/resume$#', $uri, $m) && $method === 'POST') {
             Controllers::missionResume((int)$m[1]);
+            return;
+        }
+
+
+        if (preg_match('#^/approvals/(\d+)$#', $uri, $m) && $method === 'GET') {
+            Controllers::approvalDetail((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/approvals/(\d+)/decide$#', $uri, $m) && $method === 'POST') {
+            Controllers::approvalDecide((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/plans/(\d+)$#', $uri, $m) && $method === 'GET') {
+            Controllers::planDetail((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/plans/(\d+)/preview$#', $uri, $m) && $method === 'POST') {
+            Controllers::planPreview((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/plans/(\d+)/request-approval$#', $uri, $m) && $method === 'POST') {
+            Controllers::planRequestApproval((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/plans/(\d+)/execute$#', $uri, $m) && $method === 'POST') {
+            Controllers::planExecute((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/plans/(\d+)/rollback$#', $uri, $m) && $method === 'POST') {
+            Controllers::planRollback((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/missions/(\d+)/action-plan$#', $uri, $m) && $method === 'POST') {
+            Controllers::missionCreateActionPlan((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/growth/(\d+)/mission$#', $uri, $m) && $method === 'POST') {
+            Controllers::growthOppToMission((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/growth/(\d+)/plan$#', $uri, $m) && $method === 'POST') {
+            Controllers::growthOppToPlan((int)$m[1]);
             return;
         }
 

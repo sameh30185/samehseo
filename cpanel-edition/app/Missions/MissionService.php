@@ -11,8 +11,8 @@ use Sameh\Security\Redactor;
 
 /**
  * Mission state machine + deterministic investigation.
- * Statuses: draft → running → completed | failed | cancelled
- * (resume: cancelled/failed → draft then run again)
+ * Statuses: draft → running → decision_ready | failed | cancelled
+ * (resume: cancelled/failed → draft then run again; decision_ready enables ActionPlanner)
  */
 final class MissionService
 {
@@ -208,7 +208,7 @@ final class MissionService
 
             $evIds = $evId ? [$evId] : [];
             Database::pdo()->prepare(
-                "UPDATE missions SET status = 'completed', finished_at = NOW(), summary_ar = ?, findings_json = ?, evidence_ids_json = ? WHERE id = ?"
+                "UPDATE missions SET status = 'decision_ready', finished_at = NOW(), summary_ar = ?, findings_json = ?, evidence_ids_json = ? WHERE id = ?"
             )->execute([
                 $result['summary_ar'],
                 json_encode(Redactor::forAudit($result['findings']), JSON_UNESCAPED_UNICODE),

@@ -12,25 +12,23 @@ final class WpExecutionAgent extends BaseAgent
 
     protected function llmSystemPrompt(): string
     {
-        return 'You are SAMEH WP Execution planner (draft-only).';
+        return 'You are SAMEH WP Execution planner (draft-only typed actions).';
     }
 
     protected function deterministic(array $evidenceBundle, array $context): array
     {
-
         $findings = [[
             'code' => 'exec_draft_only',
             'severity' => 'info',
-            'title' => 'تنفيذ ووردبريس',
-            'detail' => 'Phase C: Preview/Approve فقط — لا تنفيذ تلقائي في 12.1 الأساسي',
+            'title' => 'تنفيذ ووردبريس (مسودات)',
+            'detail' => 'المسار الآمن: Preview → موافقة المالك → Execute → Verify. أنواع مكتوبة فقط — لا PHP/SQL خام.',
         ]];
         return [
             'agent' => $this->name(),
             'ok' => true,
             'findings' => $findings,
-            'summary_ar' => 'التنفيذ عبر Connector مؤجل لـ Phase C (مسودات فقط)',
-            'metrics' => [],
+            'summary_ar' => 'جاهز لخطة إجراءات مسودة عبر ActionPlanner بعد decision_ready',
+            'metrics' => ['typed_only' => 1],
         ];
-
     }
 }

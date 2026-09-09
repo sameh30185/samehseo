@@ -27,6 +27,13 @@ use Sameh\Missions\MissionService;
 use Sameh\Agents\Director;
 use Sameh\Agents\TechnicalAgent;
 use Sameh\Agents\BaseAgent;
+use Sameh\Actions\TypedActionRegistry;
+use Sameh\Actions\ActionPlanner;
+use Sameh\Actions\PreviewService;
+use Sameh\Actions\ApprovalService;
+use Sameh\Actions\ExecutionService;
+use Sameh\Actions\FactoryService;
+use Sameh\Actions\GrowthService;
 
 $pass = 0;
 $fail = 0;
@@ -267,7 +274,7 @@ $sigMatch = Sameh_Connector_HMAC::sign('sec', '1', 'n', 'GET', '/p', '');
 $sigMatch2 = Sameh_Connector_HMAC::sign('sec', '1', 'n', 'GET', '/p', '');
 step('Connector HMAC deterministic + hash_equals', hash_equals($sigMatch, $sigMatch2));
 
-step('VERSION is 12.1.0-dev', Config::version() === '12.1.0-dev');
+step('VERSION is 12.1.x', str_starts_with(Config::version(), '12.1.'));
 
 // ---------- 10) isInstalled contract (documented behavior without DB) ----------
 // Reflect source: requires COUNT(users)>0
@@ -360,6 +367,100 @@ step('AI cloud OFF default documented in migration', str_contains((string)file_g
 $routerSrc = file_get_contents(dirname(__DIR__) . '/app/Http/Router.php');
 step('Recovery routes registered', str_contains($routerSrc, '/recovery') && str_contains($routerSrc, 'missions'));
 step('Mission routes replace stubs', str_contains($routerSrc, 'missionsList') && !str_contains($routerSrc, "stub('Missions')"));
+
+
+// ---------- 16) Phase C — Typed actions / gates / factory / growth ----------
+step('Typed whitelist rejects unknown', !TypedActionRegistry::isAllowed('raw_sql') && !TypedActionRegistry::isAllowed('shell_exec'));
+$rej = TypedActionRegistry::validate('drop_table', []);
+step('Typed validate unknown fails', $rej['ok'] === false);
+
+$okDraft = TypedActionRegistry::validate('create_page_draft', ['title' => 'صفحة تجريبية', 'content' => '<p>x</p>']);
+step('Typed create_page_draft valid', $okDraft['ok'] === true);
+
+$badPublish = TypedActionRegistry::validate('change_post_status', ['post_id' => 1, 'status' => 'publish']);
+step('Typed publish without confirm rejected', $badPublish['ok'] === false);
+
+$okPub = TypedActionRegistry::validate('change_post_status', ['post_id' => 1, 'status' => 'publish', 'confirm_publish' => 1]);
+step('Typed publish with confirm_publish ok', $okPub['ok'] === true);
+
+step('Extra approval for publish', TypedActionRegistry::needsExtraApproval('change_post_status', ['status' => 'publish', 'confirm_publish' => 1]));
+
+$gateNoAppr = ExecutionService::gate('READ_WRITE', false, false);
+step('Approval required before execute', $gateNoAppr['ok'] === false && str_contains($gateNoAppr['error'], 'Approval'));
+
+$gateRo = ExecutionService::gate('READ_ONLY', false, true, false);
+step('READ_ONLY blocks execute', $gateRo['ok'] === false && str_contains($gateRo['error'], 'READ_ONLY'));
+
+$gateKill = ExecutionService::gate('READ_WRITE', true, true);
+step('Kill switch blocks execute', $gateKill['ok'] === false && str_contains($gateKill['error'], 'Kill'));
+
+$gateOk = ExecutionService::gate('READ_WRITE', false, true);
+step('Execute gate passes RW+approved', $gateOk['ok'] === true);
+
+$gateElevate = ExecutionService::gate('READ_ONLY', false, true, true);
+step('Temporary elevate allows gate', $gateElevate['ok'] === true);
+
+step('ApprovalService isPlanApproved', ApprovalService::isPlanApproved(['status' => 'approved']) && !ApprovalService::isPlanApproved(['status' => 'draft']));
+
+$qaBad = FactoryService::runQa('<h1>A</h1><h1>B</h1>[shortcode]text', 'Title', 'slug');
+step('Factory QA detects duplicate H1', (static function($issues){foreach($issues as $i){if(($i['code']??'')==='duplicate_h1')return true;}return false;})($qaBad['issues']));
+
+$qaSc = FactoryService::runQa('<h1>A</h1>[foo]bar[/foo][baz]no close', 'T', 's');
+step('Factory QA detects unbalanced shortcodes', (static function($issues){foreach($issues as $i){if(($i['code']??'')==='shortcode_unbalanced')return true;}return false;})($qaSc['issues']));
+
+$qaOk = FactoryService::runQa('<h1>One</h1><p>ok</p>[gallery ids="1"]', 'Good', 'good-slug');
+// gallery self-closing style may still push — check score path runs
+step('Factory QA runs on clean-ish HTML', isset($qaOk['score']) && is_int($qaOk['score']));
+
+$conf = FactoryService::conflictChecks('Hello World', 'hello-world', ['Hello World'], ['other']);
+step('Factory title conflict detected', (static function($issues){foreach($issues as $i){if(($i['code']??'')==='title_conflict')return true;}return false;})($conf));
+
+$sim = FactoryService::titleSimilarity('خدمة تنظيف الرياض', 'خدمة تنظيف الرياض');
+step('Title similarity identical=1', $sim === 1.0);
+
+$props = ActionPlanner::proposeFromFindings([
+    ['code' => 'content_volume', 'title' => 'محتوى', 'detail' => 'قليل'],
+    ['code' => 'meta_seo', 'title' => 'SEO', 'detail' => 'desc', 'post_id' => 9],
+]);
+step('ActionPlanner proposes typed actions', count($props) >= 1 && TypedActionRegistry::isAllowed($props[0]['action_type']));
+
+$diff = PreviewService::diffOne('create_page_draft', '', ['title' => 'X', 'slug' => 'x', 'content' => ''], null, null);
+step('PreviewService diff create_page_draft', ($diff['after']['will_create']['status'] ?? '') === 'draft');
+
+$disc = [
+    'counts' => ['pages' => 1, 'posts' => 1],
+    'districts' => ['النرجس', 'الياسمين'],
+    'covered_districts' => ['النرجس'],
+    'page_titles' => ['خدمة تنظيف الرياض', 'خدمة تنظيف الرياض المنزلية', 'عنّا'],
+    'active_plugins' => ['akismet'],
+];
+$opps = GrowthService::deriveFromDiscover($disc);
+step('Growth returns opportunities', count($opps) >= 1);
+step('Growth opportunities sorted', count($opps) < 2 || GrowthService::compositeScore($opps[0]) >= GrowthService::compositeScore($opps[1]));
+$kinds = array_column($opps, 'kind');
+step('Growth includes thin or districts', in_array('thin_pages', $kinds, true) || in_array('thin_site', $kinds, true) || in_array('missing_districts', $kinds, true));
+
+$mig2 = dirname(__DIR__) . '/sql/migrations/002_12_1_actions.sql';
+$sql2 = file_get_contents($mig2);
+step('Migration 002 exists', is_string($sql2) && strlen((string)$sql2) > 100);
+step('Migration 002 additive no DROP sites', !preg_match('/DROP\\s+TABLE\\s+(users|sites)/i', (string)$sql2) && !preg_match('/DROP\\s+COLUMN\\s+(hmac_secret|pairing_token|connector_token)/i', (string)$sql2));
+step('Migration 002 has action_plans site_id', str_contains((string)$sql2, 'action_plans') && str_contains((string)$sql2, 'site_id'));
+step('Migration 002 has typed_actions + growth_opportunities', str_contains((string)$sql2, 'typed_actions') && str_contains((string)$sql2, 'growth_opportunities'));
+step('Migration 002 alters approvals additively', str_contains((string)$sql2, 'ALTER TABLE approvals ADD COLUMN plan_id'));
+
+$apSrc = file_get_contents(dirname(__DIR__) . '/app/Actions/ActionPlanner.php');
+step('ActionPlanner site_id isolation', substr_count($apSrc, 'site_id') >= 5);
+$exSrc = file_get_contents(dirname(__DIR__) . '/app/Actions/ExecutionService.php');
+step('ExecutionService checks kill switch', str_contains($exSrc, 'kill_switch') && str_contains($exSrc, 'ERR_READ_ONLY'));
+$brSrc = file_get_contents(dirname(__DIR__) . '/app/Connector/BridgeClient.php');
+step('Bridge has create_draft/update_draft/get_post', str_contains($brSrc, 'createDraft') && str_contains($brSrc, 'updateRankMath'));
+$connRest = file_get_contents(dirname(__DIR__) . '/connector-plugin/sameh-connector/includes/class-sameh-rest.php');
+step('Connector draft endpoints registered', str_contains($connRest, 'create_draft') && str_contains($connRest, 'update_rank_math') && str_contains($connRest, 'confirm_publish'));
+step('Connector refuses publish without flags', str_contains($connRest, 'Refuse publish') || str_contains($connRest, 'sameh_refuse_publish'));
+$routerSrc2 = file_get_contents(dirname(__DIR__) . '/app/Http/Router.php');
+step('Approvals and plans routes registered', str_contains($routerSrc2, 'approvalsList') && str_contains($routerSrc2, 'planExecute'));
+$msSrc2 = file_get_contents(dirname(__DIR__) . '/app/Missions/MissionService.php');
+step('Mission ends at decision_ready', str_contains($msSrc2, 'decision_ready'));
 
 // Summary
 echo "\n=== SUMMARY ===\n";

@@ -18,6 +18,13 @@ use Sameh\Install\Migrator;
 use Sameh\AI\ProviderClient;
 use Sameh\Missions\MissionService;
 use Sameh\Mail\Mailer;
+use Sameh\Actions\ActionPlanner;
+use Sameh\Actions\PreviewService;
+use Sameh\Actions\ApprovalService;
+use Sameh\Actions\ExecutionService;
+use Sameh\Actions\VerifyRollbackService;
+use Sameh\Actions\FactoryService;
+use Sameh\Actions\GrowthService;
 
 final class Controllers
 {
@@ -670,11 +677,20 @@ final class Controllers
     {
         Auth::requireLogin();
         $site = App::activeSite();
+        $plans = [];
+        if ($site) {
+            try {
+                $plans = FactoryService::listForSite((int)$site['id']);
+            } catch (\Throwable $e) {
+                $plans = [];
+            }
+        }
         App::render('factory', [
             'page' => 'factory',
             'title' => 'المصنع / Factory',
             'activeSite' => $site,
-            'phaseC' => true,
+            'templates' => FactoryService::TEMPLATES,
+            'factoryPlans' => $plans,
         ]);
     }
 
@@ -693,15 +709,78 @@ final class Controllers
         App::redirect('/missions/' . $res['id']);
     }
 
+    public static function factoryCreatePlan(): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $template = (string)($_POST['template_key'] ?? 'blank_page');
+        $title = trim((string)($_POST['title'] ?? ''));
+        $slug = trim((string)($_POST['slug'] ?? ''));
+        $content = (string)($_POST['content'] ?? '');
+        $intent = trim((string)($_POST['intent'] ?? ''));
+        $existingTitles = [];
+        $existingSlugs = [];
+        if (!empty($site['last_discover_json'])) {
+            $disc = json_decode((string)$site['last_discover_json'], true) ?: [];
+            foreach (($disc['sample_titles'] ?? $disc['page_titles'] ?? []) as $row) {
+                if (is_array($row)) {
+                    $existingTitles[] = (string)($row['title'] ?? '');
+                    if (!empty($row['slug'])) {
+                        $existingSlugs[] = (string)$row['slug'];
+                    }
+                } else {
+                    $existingTitles[] = (string)$row;
+                }
+            }
+        }
+        $res = FactoryService::createDraftPlan(
+            (int)$site['id'],
+            $template,
+            $title,
+            $slug,
+            $content,
+            (int)$u['id'],
+            $existingTitles,
+            $existingSlugs,
+            $intent
+        );
+        if (!$res['ok']) {
+            App::flash('error', $res['error'] ?? 'فشل إنشاء خطة المصنع');
+            App::redirect('/factory');
+        }
+        $msg = 'تم إنشاء خطة مسودة';
+        if (!empty($res['conflicts'])) {
+            $msg .= ' — تنبيه تعارضات: ' . count($res['conflicts']);
+        }
+        if (!empty($res['qa']['issues'])) {
+            $msg .= ' — ملاحظات QA: ' . count($res['qa']['issues']);
+        }
+        App::flash('success', $msg);
+        if (!empty($res['action_plan_id'])) {
+            App::redirect('/plans/' . $res['action_plan_id']);
+        }
+        App::redirect('/factory');
+    }
+
     public static function growth(): void
     {
         Auth::requireLogin();
         $site = App::activeSite();
+        $opps = [];
+        if ($site) {
+            try {
+                $opps = GrowthService::listForSite((int)$site['id']);
+            } catch (\Throwable $e) {
+                $opps = [];
+            }
+        }
         App::render('growth', [
             'page' => 'growth',
             'title' => 'النمو / Growth',
             'activeSite' => $site,
-            'phaseC' => true,
+            'opportunities' => $opps,
         ]);
     }
 
@@ -718,6 +797,225 @@ final class Controllers
         }
         App::flash('success', 'تم إنشاء مهمة نمو / Growth mission created');
         App::redirect('/missions/' . $res['id']);
+    }
+
+    public static function growthRefresh(): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $discover = [];
+        if (!empty($site['last_discover_json'])) {
+            $discover = json_decode((string)$site['last_discover_json'], true) ?: [];
+        }
+        $opps = GrowthService::deriveFromDiscover($discover);
+        $n = GrowthService::persistForSite((int)$site['id'], $opps, (int)$u['id']);
+        App::flash('success', "تم اشتقاق {$n} فرصة من Discover / Opportunities derived");
+        App::redirect('/growth');
+    }
+
+    public static function growthOppToMission(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = GrowthService::toMission($id, (int)$site['id'], (int)$u['id']);
+        if (!$res['ok']) {
+            App::flash('error', $res['error'] ?? 'فشل');
+            App::redirect('/growth');
+        }
+        App::flash('success', 'تم ربط الفرصة بمهمة');
+        App::redirect('/missions/' . $res['mission_id']);
+    }
+
+    public static function growthOppToPlan(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = GrowthService::toDraftPlan($id, (int)$site['id'], (int)$u['id']);
+        if (!$res['ok']) {
+            App::flash('error', $res['error'] ?? 'فشل');
+            App::redirect('/growth');
+        }
+        App::flash('success', 'تم إنشاء خطة مسودة من الفرصة (صفحة واحدة فقط)');
+        App::redirect('/plans/' . $res['plan_id']);
+    }
+
+    public static function approvalsList(): void
+    {
+        Auth::requireLogin();
+        $site = App::activeSite();
+        $rows = $site ? ApprovalService::listForSite((int)$site['id']) : [];
+        App::render('approvals_list', [
+            'page' => 'approvals',
+            'title' => 'الموافقات / Approvals',
+            'approvals' => $rows,
+            'activeSite' => $site,
+        ]);
+    }
+
+    public static function approvalDetail(int $id): void
+    {
+        Auth::requireLogin();
+        $site = App::requireActiveSite();
+        $row = ApprovalService::findForSite($id, (int)$site['id']);
+        if (!$row) {
+            App::flash('error', 'الموافقة غير موجودة');
+            App::redirect('/approvals');
+        }
+        $plan = null;
+        $preview = null;
+        if (!empty($row['plan_id'])) {
+            $plan = ActionPlanner::findForSite((int)$row['plan_id'], (int)$site['id']);
+            if ($plan && !empty($plan['preview_json'])) {
+                $preview = json_decode((string)$plan['preview_json'], true);
+            }
+        }
+        App::render('approval_detail', [
+            'page' => 'approvals',
+            'title' => 'موافقة #' . $id,
+            'approval' => $row,
+            'plan' => $plan,
+            'preview' => $preview,
+            'activeSite' => $site,
+            'user' => Auth::user(),
+        ]);
+    }
+
+    public static function approvalDecide(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $decision = (string)($_POST['decision'] ?? '');
+        $note = (string)($_POST['note'] ?? '');
+        $totp = isset($_POST['totp_code']) ? (string)$_POST['totp_code'] : null;
+        if (!empty($_POST['confirm_extra'])) {
+            $note = trim($note . ' confirm_extra=1');
+        }
+        $res = ApprovalService::decide($id, (int)$site['id'], (int)$u['id'], $decision, $note, $totp);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تم تسجيل القرار' : ($res['error'] ?? 'فشل'));
+        App::redirect('/approvals/' . $id);
+    }
+
+    public static function plansList(): void
+    {
+        Auth::requireLogin();
+        $site = App::activeSite();
+        $plans = $site ? ActionPlanner::listForSite((int)$site['id']) : [];
+        App::render('plans_list', [
+            'page' => 'plans',
+            'title' => 'خطط الإجراءات / Action plans',
+            'plans' => $plans,
+            'activeSite' => $site,
+        ]);
+    }
+
+    public static function planDetail(int $id): void
+    {
+        Auth::requireLogin();
+        $site = App::requireActiveSite();
+        $plan = ActionPlanner::findForSite($id, (int)$site['id']);
+        if (!$plan) {
+            App::flash('error', 'الخطة غير موجودة');
+            App::redirect('/plans');
+        }
+        $actions = ActionPlanner::actionsForPlan($id, (int)$site['id']);
+        $preview = !empty($plan['preview_json']) ? (json_decode((string)$plan['preview_json'], true) ?: []) : [];
+        App::render('plan_detail', [
+            'page' => 'plans',
+            'title' => 'خطة #' . $id,
+            'plan' => $plan,
+            'actions' => $actions,
+            'preview' => $preview,
+            'activeSite' => $site,
+        ]);
+    }
+
+    public static function planPreview(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $discover = [];
+        if (!empty($site['last_discover_json'])) {
+            $discover = json_decode((string)$site['last_discover_json'], true) ?: [];
+        }
+        $res = PreviewService::buildForPlan($id, (int)$site['id'], $discover);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'جاهز للمعاينة / Preview ready' : ($res['error'] ?? 'فشل'));
+        App::redirect('/plans/' . $id);
+    }
+
+    public static function planRequestApproval(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = ApprovalService::requestApproval($id, (int)$site['id'], (int)$u['id']);
+        if (!$res['ok']) {
+            App::flash('error', $res['error'] ?? 'فشل طلب الموافقة');
+            App::redirect('/plans/' . $id);
+        }
+        App::flash('success', 'بانتظار موافقة المالك');
+        App::redirect('/approvals/' . $res['approval_id']);
+    }
+
+    public static function planExecute(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $elevate = !empty($_POST['temporary_elevate']);
+        $confirmExtra = !empty($_POST['confirm_extra']);
+        $res = ExecutionService::executePlan($id, (int)$site['id'], (int)$u['id'], $elevate, $confirmExtra);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تم التنفيذ والتحقق' : ($res['error'] ?? 'فشل التنفيذ'));
+        App::redirect('/plans/' . $id);
+    }
+
+    public static function planRollback(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $res = VerifyRollbackService::rollbackPlan($id, (int)$site['id'], (int)$u['id']);
+        App::flash($res['ok'] ? 'success' : 'error', $res['ok'] ? 'تم التراجع' : ($res['error'] ?? 'فشل'));
+        App::redirect('/plans/' . $id);
+    }
+
+    public static function missionCreateActionPlan(int $id): void
+    {
+        Auth::requireLogin();
+        Csrf::requireValid();
+        $site = App::requireActiveSite();
+        $u = Auth::user();
+        $m = MissionService::findForSite($id, (int)$site['id']);
+        if (!$m) {
+            App::flash('error', 'المهمة غير موجودة');
+            App::redirect('/missions');
+        }
+        if (!in_array($m['status'], ['decision_ready', 'completed'], true)) {
+            App::flash('error', 'المهمة ليست جاهزة للقرار / Mission not decision_ready');
+            App::redirect('/missions/' . $id);
+        }
+        $findings = [];
+        if (!empty($m['findings_json'])) {
+            $findings = json_decode((string)$m['findings_json'], true) ?: [];
+        }
+        $res = ActionPlanner::fromMissionFindings((int)$site['id'], $id, $findings, (int)$u['id']);
+        if (!$res['ok']) {
+            App::flash('error', $res['error'] ?? 'فشل');
+            App::redirect('/missions/' . $id);
+        }
+        App::flash('success', 'تم إنشاء خطة إجراءات مسودة');
+        App::redirect('/plans/' . $res['plan_id']);
     }
 
     public static function stub(string $name): void

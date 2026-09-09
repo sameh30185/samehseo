@@ -14,7 +14,7 @@
 2. ارفع حزمة `SAMEH-12.1-professional.zip` فوق المجلد الحالي (أو استبدل الملفات مع الإبقاء على `config.php` / `config.local.php` و`storage`).
 3. تأكد أن Document Root يشير إلى `public/`.
 4. افتح لوحة التحكم مرة — عند التثبيت المكتمل يشغّل `Migrator` تلقائياً ملفات `sql/migrations/*.sql` ويسجّلها في `schema_migrations`.
-5. تحقق من الإصدار في الإعدادات: `12.1.0-dev` (أو رقم الإصدار في `VERSION`).
+5. تحقق من الإصدار في الإعدادات: `12.1.0-rc1` (أو رقم الإصدار في `VERSION`).
 
 ## ما يُضاف (بدون تدمير بيانات)
 - `password_reset_tokens`, `evidence`, `project_brain`, `missions`, `mission_runs`, `decisions`
@@ -59,3 +59,13 @@
 - مفتاح API مشفّر عند التخزين عبر `app_key` (أو مشتق احتياطي).
 
 راجع أيضاً: `docs/AI-GATEWAY.md` و`12.1-STATUS.md`.
+
+
+## Phase C — الإجراءات المكتوبة (12.1.0-rc1)
+- جداول إضافية: `action_plans`, `typed_actions`, `factory_plans`, `growth_opportunities` + أعمدة على `approvals`
+- المسار الآمن: معاينة → موافقة المالك → تنفيذ → تحقق → تراجع اختياري
+- الوضع الافتراضي للموقع **READ_ONLY**؛ التنفيذ يتطلب `READ_WRITE` أو رفعاً مؤقتاً مع تسجيل تدقيق
+- Kill Switch يوقف التنفيذ
+- أنواع الإجراءات فقط: update_page_draft, create_page_draft, update_rank_math_meta, update_internal_links, update_image_metadata, change_post_status
+- النشر/الحذف يحتاج `confirm_publish` + علم خطر معتمد من Core
+- حدّث إضافة Connector إلى `1.1.0-dev` على ووردبريس بعد رفع الحزمة

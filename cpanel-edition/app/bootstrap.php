@@ -36,6 +36,14 @@ require_once __DIR__ . '/Agents/QaAgent.php';
 require_once __DIR__ . '/Agents/WpExecutionAgent.php';
 require_once __DIR__ . '/Agents/Director.php';
 require_once __DIR__ . '/Missions/MissionService.php';
+require_once __DIR__ . '/Actions/TypedActionRegistry.php';
+require_once __DIR__ . '/Actions/ActionPlanner.php';
+require_once __DIR__ . '/Actions/PreviewService.php';
+require_once __DIR__ . '/Actions/ApprovalService.php';
+require_once __DIR__ . '/Actions/ExecutionService.php';
+require_once __DIR__ . '/Actions/VerifyRollbackService.php';
+require_once __DIR__ . '/Actions/FactoryService.php';
+require_once __DIR__ . '/Actions/GrowthService.php';
 require_once __DIR__ . '/Http/Router.php';
 require_once __DIR__ . '/Http/Controllers.php';
 
