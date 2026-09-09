@@ -17,12 +17,36 @@ final class Auth
         }
         static $cache = null;
         if ($cache !== null && (int)$cache['id'] === (int)$_SESSION['user_id']) {
+            // Re-check session version against DB once per request via cache miss only
             return $cache;
         }
-        $stmt = Database::pdo()->prepare('SELECT id, email, display_name, role, totp_secret, totp_enabled FROM users WHERE id = ? LIMIT 1');
-        $stmt->execute([(int)$_SESSION['user_id']]);
+        $stmt = Database::pdo()->prepare(
+            'SELECT id, email, display_name, role, totp_secret, totp_enabled, session_version FROM users WHERE id = ? LIMIT 1'
+        );
+        try {
+            $stmt->execute([(int)$_SESSION['user_id']]);
+        } catch (\Throwable $e) {
+            // Pre-migration schema without session_version
+            $stmt = Database::pdo()->prepare(
+                'SELECT id, email, display_name, role, totp_secret, totp_enabled FROM users WHERE id = ? LIMIT 1'
+            );
+            $stmt->execute([(int)$_SESSION['user_id']]);
+        }
         $row = $stmt->fetch();
-        $cache = $row ?: null;
+        if (!$row) {
+            return null;
+        }
+        // Session revoke via session_version
+        if (isset($row['session_version'])) {
+            $sv = (int)$row['session_version'];
+            $sessSv = (int)($_SESSION['session_version'] ?? 0);
+            if ($sessSv > 0 && $sv !== $sessSv) {
+                self::logout();
+                \Sameh\App::startSession();
+                return null;
+            }
+        }
+        $cache = $row;
         return $cache;
     }
 
@@ -38,6 +62,16 @@ final class Auth
         }
         if (!empty($_SESSION['totp_pending'])) {
             \Sameh\App::redirect('/2fa/verify');
+        }
+    }
+
+    public static function requireOwner(): void
+    {
+        self::requireLogin();
+        $u = self::user();
+        if (!$u || ($u['role'] ?? '') !== 'owner') {
+            \Sameh\App::flash('error', 'صلاحية المالك مطلوبة / Owner only');
+            \Sameh\App::redirect('/dashboard');
         }
     }
 
@@ -71,11 +105,11 @@ final class Auth
 
         if ((int)$user['totp_enabled'] === 1 && !empty($user['totp_secret'])) {
             $_SESSION['totp_pending'] = (int)$user['id'];
-            unset($_SESSION['user_id']);
+            unset($_SESSION['user_id'], $_SESSION['session_version']);
             return ['ok' => true, 'need_2fa' => true];
         }
 
-        self::establishSession((int)$user['id']);
+        self::establishSession((int)$user['id'], isset($user['session_version']) ? (int)$user['session_version'] : 1);
         AuditLog::write((int)$user['id'], 'login', 'user', (string)$user['id'], []);
         return ['ok' => true, 'need_2fa' => false, 'need_setup_2fa' => (int)$user['totp_enabled'] !== 1];
     }
@@ -106,15 +140,25 @@ final class Auth
         }
         $limiter->clear($bucket);
         unset($_SESSION['totp_pending']);
-        self::establishSession($uid);
+        self::establishSession($uid, isset($user['session_version']) ? (int)$user['session_version'] : 1);
         AuditLog::write($uid, 'login', 'user', (string)$uid, ['2fa' => true]);
         return true;
     }
 
-    public static function establishSession(int $userId): void
+    public static function establishSession(int $userId, ?int $sessionVersion = null): void
     {
         session_regenerate_id(true);
         $_SESSION['user_id'] = $userId;
+        if ($sessionVersion === null) {
+            try {
+                $sv = Database::pdo()->prepare('SELECT session_version FROM users WHERE id = ?');
+                $sv->execute([$userId]);
+                $sessionVersion = (int)($sv->fetchColumn() ?: 1);
+            } catch (\Throwable $e) {
+                $sessionVersion = 1;
+            }
+        }
+        $_SESSION['session_version'] = $sessionVersion;
         unset($_SESSION['totp_pending']);
     }
 
@@ -131,10 +175,17 @@ final class Auth
     public static function createOwner(string $email, string $password, string $displayName): int
     {
         $hash = self::hashPassword($password);
-        $stmt = Database::pdo()->prepare(
-            'INSERT INTO users (email, password_hash, display_name, role) VALUES (?, ?, ?, ?)'
-        );
-        $stmt->execute([strtolower(trim($email)), $hash, $displayName, 'owner']);
+        try {
+            $stmt = Database::pdo()->prepare(
+                'INSERT INTO users (email, password_hash, display_name, role, session_version) VALUES (?, ?, ?, ?, 1)'
+            );
+            $stmt->execute([strtolower(trim($email)), $hash, $displayName, 'owner']);
+        } catch (\Throwable $e) {
+            $stmt = Database::pdo()->prepare(
+                'INSERT INTO users (email, password_hash, display_name, role) VALUES (?, ?, ?, ?)'
+            );
+            $stmt->execute([strtolower(trim($email)), $hash, $displayName, 'owner']);
+        }
         return (int) Database::pdo()->lastInsertId();
     }
 
@@ -151,13 +202,46 @@ final class Auth
         $stmt->execute([$secret, $userId]);
     }
 
-    /**
-     * Explicit reset: clear enabled TOTP so user can re-enroll.
-     */
     public static function resetTotp(int $userId): void
     {
         $stmt = Database::pdo()->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?');
         $stmt->execute([$userId]);
         AuditLog::write($userId, '2fa_reset', 'user', (string)$userId, []);
+    }
+
+    /**
+     * Change password (settings): require current password + TOTP if enabled.
+     */
+    public static function changePassword(int $userId, string $current, string $new, ?string $totpCode = null): array
+    {
+        if (strlen($new) < 10) {
+            return ['ok' => false, 'error' => 'كلمة المرور الجديدة 10 أحرف على الأقل'];
+        }
+        $stmt = Database::pdo()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch();
+        if (!$user || !password_verify($current, $user['password_hash'])) {
+            AuditLog::write($userId, 'password_change_failed', 'user', (string)$userId, ['reason' => 'bad_current']);
+            return ['ok' => false, 'error' => 'كلمة المرور الحالية غير صحيحة / Current password wrong'];
+        }
+        if ((int)$user['totp_enabled'] === 1 && !empty($user['totp_secret'])) {
+            if ($totpCode === null || !Totp::verify($user['totp_secret'], (string)$totpCode)) {
+                AuditLog::write($userId, 'password_change_failed', 'user', (string)$userId, ['reason' => 'bad_totp']);
+                return ['ok' => false, 'error' => 'رمز 2FA غير صحيح / Invalid TOTP'];
+            }
+        }
+        $hash = self::hashPassword($new);
+        try {
+            Database::pdo()->prepare(
+                'UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ?'
+            )->execute([$hash, $userId]);
+            $sv = Database::pdo()->prepare('SELECT session_version FROM users WHERE id = ?');
+            $sv->execute([$userId]);
+            $_SESSION['session_version'] = (int)$sv->fetchColumn();
+        } catch (\Throwable $e) {
+            Database::pdo()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([$hash, $userId]);
+        }
+        AuditLog::write($userId, 'password_changed', 'user', (string)$userId, ['sessions_revoked' => true]);
+        return ['ok' => true];
     }
 }

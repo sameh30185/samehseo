@@ -51,7 +51,28 @@ final class Database
             }
             $stmt = $pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'installed' LIMIT 1");
             $row = $stmt->fetch();
-            return $row && $row['setting_value'] === '1';
+            if (!$row || $row['setting_value'] !== '1') {
+                return false;
+            }
+            // Schema alone is not enough — require at least one Owner/user
+            $count = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+            return $count > 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** True when schema flag set but no users (broken/partial install). */
+    public static function needsOwnerBootstrap(): bool
+    {
+        try {
+            $pdo = self::pdo();
+            $stmt = $pdo->query("SHOW TABLES LIKE 'users'");
+            if (!$stmt || !$stmt->fetch()) {
+                return false;
+            }
+            $count = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+            return $count === 0;
         } catch (\Throwable $e) {
             return false;
         }

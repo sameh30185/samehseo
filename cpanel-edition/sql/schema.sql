@@ -1,4 +1,4 @@
--- SAMEH 12.0 cPanel Edition schema (12.0.0-rc1)
+-- SAMEH 12.0 base schema (12.1 applies sql/migrations/*.sql additively)
 -- Charset: utf8mb4 for Arabic
 
 SET NAMES utf8mb4;

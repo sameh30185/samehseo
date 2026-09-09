@@ -13,22 +13,21 @@ final class Router
     {
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-        // Strip subdirectory if app is in a subfolder (optional)
         $uri = '/' . trim($uri, '/');
         if ($uri !== '/') {
             $uri = rtrim($uri, '/') ?: '/';
         }
 
-        // Install gate
+        // Install gate — allow recovery + login paths when installed
         $needsInstall = !Config::isConfigured() || !Database::isInstalled();
-        if ($needsInstall && !in_array($uri, ['/install', '/'], true)) {
+        $publicWhenInstalling = ['/install', '/'];
+        if ($needsInstall && !in_array($uri, $publicWhenInstalling, true)) {
             App::redirect('/install');
         }
         if ($needsInstall && $uri === '/') {
             App::redirect('/install');
         }
 
-        // Routes
         if ($uri === '/' && $method === 'GET') {
             App::redirect('/dashboard');
         }
@@ -40,6 +39,12 @@ final class Router
             'POST /login' => [Controllers::class, 'loginPost'],
             'GET /logout' => [Controllers::class, 'logout'],
             'POST /logout' => [Controllers::class, 'logout'],
+            'GET /recovery' => [Controllers::class, 'recoveryRequestGet'],
+            'POST /recovery' => [Controllers::class, 'recoveryRequestPost'],
+            'GET /recovery/reset' => [Controllers::class, 'recoveryResetGet'],
+            'POST /recovery/reset' => [Controllers::class, 'recoveryResetPost'],
+            'GET /recovery/emergency' => [Controllers::class, 'recoveryEmergencyGet'],
+            'POST /recovery/emergency' => [Controllers::class, 'recoveryEmergencyPost'],
             'GET /2fa/setup' => [Controllers::class, 'totpSetupGet'],
             'POST /2fa/setup' => [Controllers::class, 'totpSetupPost'],
             'GET /2fa/verify' => [Controllers::class, 'totpVerifyGet'],
@@ -51,9 +56,12 @@ final class Router
             'GET /settings' => [Controllers::class, 'settingsGet'],
             'POST /settings' => [Controllers::class, 'settingsPost'],
             'GET /audit' => [Controllers::class, 'audit'],
-            'GET /missions' => fn() => Controllers::stub('Missions'),
-            'GET /factory' => fn() => Controllers::stub('Factory'),
-            'GET /growth' => fn() => Controllers::stub('Growth'),
+            'GET /missions' => [Controllers::class, 'missionsList'],
+            'POST /missions' => [Controllers::class, 'missionsCreatePost'],
+            'GET /factory' => [Controllers::class, 'factory'],
+            'POST /factory/mission' => [Controllers::class, 'factoryCreateMission'],
+            'GET /growth' => [Controllers::class, 'growth'],
+            'POST /growth/mission' => [Controllers::class, 'growthCreateMission'],
         ];
 
         $key = $method . ' ' . $uri;
@@ -65,7 +73,6 @@ final class Router
             }
         }
 
-        // Dynamic: /sites/{id}, /sites/{id}/pair, health, discover
         if (preg_match('#^/sites/(\d+)$#', $uri, $m) && $method === 'GET') {
             Controllers::siteDetail((int)$m[1]);
             return;
@@ -80,6 +87,26 @@ final class Router
         }
         if (preg_match('#^/sites/(\d+)/discover$#', $uri, $m) && $method === 'POST') {
             Controllers::siteDiscover((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/sites/(\d+)/activate$#', $uri, $m) && $method === 'POST') {
+            Controllers::siteActivate((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/missions/(\d+)$#', $uri, $m) && $method === 'GET') {
+            Controllers::missionDetail((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/missions/(\d+)/run$#', $uri, $m) && $method === 'POST') {
+            Controllers::missionRun((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/missions/(\d+)/cancel$#', $uri, $m) && $method === 'POST') {
+            Controllers::missionCancel((int)$m[1]);
+            return;
+        }
+        if (preg_match('#^/missions/(\d+)/resume$#', $uri, $m) && $method === 'POST') {
+            Controllers::missionResume((int)$m[1]);
             return;
         }
 

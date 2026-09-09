@@ -27,5 +27,6 @@
     <?php endforeach; ?>
     </tbody>
   </table>
+
 <?php endif; ?>
 </div>

@@ -8,4 +8,7 @@
     <input type="password" name="password" required autocomplete="current-password">
     <button type="submit">دخول / Sign in</button>
   </form>
+  <p style="margin-top:1rem;font-size:0.9rem;">
+    <a href="/recovery">نسيت كلمة المرور؟ / Forgot password</a>
+  </p>
 </div>

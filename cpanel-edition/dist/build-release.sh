@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Reproducible SAMEH 12.0 cPanel Edition release builder
+# Reproducible SAMEH 12.1 Professional (cPanel) release builder
 # Outputs:
-#   cpanel-edition/dist/SAMEH-12.0-cpanel.zip
+#   cpanel-edition/dist/SAMEH-12.1-professional.zip
 #   cpanel-edition/dist/SAMEH-connector.zip
 # Also copies both to repo root when invoked from a git checkout.
 set -euo pipefail
@@ -17,7 +17,7 @@ mkdir -p "$DIST"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-STAGE="$TMP/sameh-12.0-cpanel"
+STAGE="$TMP/sameh-12.1-professional"
 mkdir -p "$STAGE"
 
 echo "==> Building SAMEH cPanel Edition $VERSION from $CPANEL_ROOT"
@@ -37,7 +37,8 @@ tar -C "$CPANEL_ROOT" \
   -cf - . | tar -C "$STAGE" -xf -
 
 # Ensure empty storage dirs exist in package
-mkdir -p "$STAGE/storage/nonces" "$STAGE/storage/rate"
+mkdir -p "$STAGE/storage/nonces" "$STAGE/storage/rate" "$STAGE/storage/mail-outbox"
+touch "$STAGE/storage/mail-outbox/.gitkeep"
 touch "$STAGE/storage/nonces/.gitkeep" "$STAGE/storage/rate/.gitkeep"
 
 # Connector zip (WP plugin uploadable)
@@ -51,16 +52,16 @@ cp "$CONN_ZIP" "$STAGE/dist/SAMEH-connector.zip"
 cp "$CONN_ZIP" "$STAGE/dist/sameh-connector.zip"
 
 # Main package zip
-MAIN_ZIP="$DIST/SAMEH-12.0-cpanel.zip"
+MAIN_ZIP="$DIST/SAMEH-12.1-professional.zip"
 rm -f "$MAIN_ZIP"
-( cd "$TMP" && zip -qr "$MAIN_ZIP" sameh-12.0-cpanel )
+( cd "$TMP" && zip -qr "$MAIN_ZIP" sameh-12.1-professional )
 
 # Copy to repo root (docs historically expect this)
-cp -f "$MAIN_ZIP" "$REPO_ROOT/SAMEH-12.0-cpanel.zip"
+cp -f "$MAIN_ZIP" "$REPO_ROOT/SAMEH-12.1-professional.zip"
 cp -f "$CONN_ZIP" "$REPO_ROOT/SAMEH-connector.zip"
 
 # Sync sibling tree if present (cpanel-edition is source of truth)
-SIBLING="/workspace/sameh-12.0-cpanel"
+SIBLING="/workspace/sameh-12.1-professional"
 if [[ -d "$SIBLING" ]]; then
   echo "==> Syncing source of truth → $SIBLING"
   # Prefer rsync; fall back to tar overwrite

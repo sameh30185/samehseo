@@ -5,3 +5,5 @@ storage/nonces/*
 !storage/nonces/.gitkeep
 storage/rate/*
 !storage/rate/.gitkeep
+storage/mail-outbox/*
+!storage/mail-outbox/.gitkeep

@@ -8,24 +8,43 @@ use Sameh\Security\Redactor;
 
 final class AuditLog
 {
-    public static function write(?int $userId, string $action, ?string $entityType = null, ?string $entityId = null, array $details = []): void
+    public static function write(?int $userId, string $action, ?string $entityType = null, ?string $entityId = null, array $details = [], ?int $siteId = null): void
     {
         try {
             $ip = $_SERVER['REMOTE_ADDR'] ?? null;
             $safe = Redactor::forAudit($details);
-            $stmt = Database::pdo()->prepare(
-                'INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, details_json) VALUES (?, ?, ?, ?, ?, ?)'
-            );
-            $stmt->execute([
-                $userId,
-                $action,
-                $entityType,
-                $entityId,
-                $ip,
-                $safe ? json_encode($safe, JSON_UNESCAPED_UNICODE) : null,
-            ]);
+            if ($siteId === null && isset($safe['site_id']) && is_numeric($safe['site_id'])) {
+                $siteId = (int)$safe['site_id'];
+            }
+            // Prefer column if migrated
+            try {
+                $stmt = Database::pdo()->prepare(
+                    'INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, details_json, site_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                );
+                $stmt->execute([
+                    $userId,
+                    $action,
+                    $entityType,
+                    $entityId,
+                    $ip,
+                    $safe ? json_encode($safe, JSON_UNESCAPED_UNICODE) : null,
+                    $siteId,
+                ]);
+            } catch (\Throwable $e) {
+                $stmt = Database::pdo()->prepare(
+                    'INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, details_json) VALUES (?, ?, ?, ?, ?, ?)'
+                );
+                $stmt->execute([
+                    $userId,
+                    $action,
+                    $entityType,
+                    $entityId,
+                    $ip,
+                    $safe ? json_encode($safe, JSON_UNESCAPED_UNICODE) : null,
+                ]);
+            }
         } catch (\Throwable $e) {
-            // never break primary flow; never log exception that may contain secrets
+            // never break primary flow
         }
     }
 

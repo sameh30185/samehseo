@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * SAMEH 12.0 cPanel Edition — front controller
+ * SAMEH 12.1 Professional — front controller
  * Document root must point here.
  */
 
@@ -16,4 +16,5 @@ use Sameh\App;
 use Sameh\Http\Router;
 
 App::startSession();
+App::bootMigrations();
 Router::dispatch();
